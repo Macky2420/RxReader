@@ -1,11 +1,11 @@
 export const researchStudy = {
-  title: "RxReader: AI-Powered Prescription Recognition",
-  subtitle: "Digital Recognition of Handwritten Prescriptions for Medical Research and Documentation",
+  title: "RxReader",
+  subtitle:
+    "A Convolutional Neural Network-Based Approach for Handwritten Character Recognition of Medical Prescriptions",
   members: [
-    "Dr. Ahmed Hassan",
-    "Dr. Fatima Al-Mansouri",
-    "Prof. Mohammed Al-Kaabi",
-    "Dr. Sarah Johnson",
-    "James Chen",
+    "Francis Ivan Rhey M. Batican",
+    "Ejay Boy O. Labajo",
+    "Ma. Glysa Taneo",
+    "Arica A. Abelgas",
   ],
 };

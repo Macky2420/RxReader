@@ -1,10 +1,19 @@
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ChevronRight, Pill, Users, Microscope } from "lucide-react";
+import {
+  ChevronRight,
+  Pill,
+  Users,
+  Microscope,
+  X,
+  LoaderCircle,
+} from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import landingBg from "../assets/landing_bg.webp";
 import { medications } from "../utils/medications";
 import { researchStudy } from "../utils/researchTeam";
+import { supabase } from "../utils/supabase";
+import { ensureUser } from "../assets/lib/ensureUser";
 
 type OnboardingProps = {
   onComplete?: () => void;
@@ -12,8 +21,13 @@ type OnboardingProps = {
 
 export default function Onboarding({ onComplete }: OnboardingProps) {
   const navigate = useNavigate();
+
   const [currentSlide, setCurrentSlide] = useState(0);
   const [direction, setDirection] = useState(0);
+  const [showNameModal, setShowNameModal] = useState(false);
+  const [fullName, setFullName] = useState("");
+  const [nameError, setNameError] = useState("");
+  const [saving, setSaving] = useState(false);
 
   const isLastSlide = currentSlide === 2;
 
@@ -42,14 +56,50 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
       return;
     }
 
-    localStorage.setItem("rxreader_onboarding_completed", "true");
+    setShowNameModal(true);
+  };
 
-    if (typeof onComplete === "function") {
-      onComplete();
+  const handleSubmitName = async () => {
+    const cleanName = fullName.trim();
+
+    if (!cleanName) {
+      setNameError("Full name is required.");
       return;
     }
 
-    navigate("/dashboard", { replace: true });
+    setNameError("");
+
+    try {
+      setSaving(true);
+
+      const session = await ensureUser();
+      const user = session.user;
+
+      console.log("Supabase UID:", user.id);
+
+      localStorage.setItem("rxreader_uid", user.id);
+      localStorage.setItem("rxreader_full_name", cleanName);
+      localStorage.setItem("rxreader_onboarding_completed", "true");
+
+      const { error } = await supabase.from("profiles").upsert({
+        id: user.id,
+        full_name: cleanName,
+      });
+
+      if (error) throw error;
+
+      if (typeof onComplete === "function") {
+        onComplete();
+        return;
+      }
+
+      navigate("/dashboard", { replace: true });
+    } catch (error) {
+      console.error("Failed to save onboarding profile:", error);
+      alert("Failed to save profile. Check the console.");
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -86,10 +136,7 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
                   >
                     <div className="flex h-full flex-col items-center justify-center px-5 py-6 text-center">
                       <div className="mb-5 flex h-20 w-20 items-center justify-center rounded-[24px] border border-white/25 bg-gradient-to-br from-sky-400/90 to-blue-500/90 shadow-[0_10px_30px_rgba(14,165,233,0.35)]">
-                        <Pill
-                          className="h-10 w-10 text-white"
-                          strokeWidth={2.5}
-                        />
+                        <Pill className="h-10 w-10 text-white" strokeWidth={2.5} />
                       </div>
 
                       <h1 className="mb-3 text-4xl font-black text-white">
@@ -140,10 +187,7 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
                     <div className="flex h-full flex-col px-4 py-5">
                       <div className="mb-3 flex flex-col items-center text-center">
                         <div className="mb-3 flex h-16 w-16 items-center justify-center rounded-[22px] border border-white/25 bg-gradient-to-br from-emerald-400/90 to-teal-500/90 shadow-[0_10px_30px_rgba(16,185,129,0.28)]">
-                          <Microscope
-                            className="h-8 w-8 text-white"
-                            strokeWidth={2.5}
-                          />
+                          <Microscope className="h-8 w-8 text-white" strokeWidth={2.5} />
                         </div>
 
                         <h2 className="mb-2 text-[28px] font-black leading-none text-white">
@@ -151,21 +195,14 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
                         </h2>
 
                         <p className="max-w-md text-sm leading-6 text-white/80">
-                          Our AI model can recognize these medications from
-                          handwritten prescriptions
+                          Our AI model can recognize these medications from handwritten prescriptions
                         </p>
                       </div>
 
                       <div className="flex-1 rounded-2xl border border-white/15 bg-white/10 p-3 backdrop-blur-xl">
                         <div className="grid h-full grid-cols-2 gap-2">
                           {medications.slice(0, 10).map((med, index) => {
-                            const label =
-                              typeof med === "string"
-                                ? med
-                                : med.name ||
-                                  med.label ||
-                                  med.medication_name ||
-                                  "";
+                            const label = typeof med === "string" ? med : "";
 
                             return (
                               <motion.div
@@ -202,10 +239,7 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
                     <div className="flex h-full flex-col px-4 py-5 text-center">
                       <div className="mb-3 flex flex-col items-center">
                         <div className="mb-3 flex h-16 w-16 items-center justify-center rounded-[22px] border border-white/25 bg-gradient-to-br from-violet-400/90 to-purple-500/90 shadow-[0_10px_30px_rgba(139,92,246,0.28)]">
-                          <Users
-                            className="h-8 w-8 text-white"
-                            strokeWidth={2.5}
-                          />
+                          <Users className="h-8 w-8 text-white" strokeWidth={2.5} />
                         </div>
 
                         <h2 className="mb-2 text-[28px] font-black leading-none text-white">
@@ -273,7 +307,8 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
 
               <button
                 onClick={handleNext}
-                className="mx-auto flex w-full items-center justify-center gap-2 rounded-2xl border border-white/20 bg-white/15 py-3.5 text-white shadow-[0_8px_24px_rgba(0,0,0,0.18)] backdrop-blur-xl transition-all duration-300 hover:bg-white/20 active:scale-[0.98]"
+                disabled={saving}
+                className="mx-auto flex w-full items-center justify-center gap-2 rounded-2xl border border-white/20 bg-white/15 py-3.5 text-white shadow-[0_8px_24px_rgba(0,0,0,0.18)] backdrop-blur-xl transition-all duration-300 hover:bg-white/20 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60"
               >
                 <span className="text-base font-semibold">
                   {isLastSlide ? "Start" : "Next"}
@@ -284,6 +319,76 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
           </div>
         </div>
       </div>
+
+      {showNameModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center px-5">
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
+
+          <div className="relative w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl">
+            <button
+              onClick={() => setShowNameModal(false)}
+              disabled={saving}
+              className="absolute right-4 top-4 rounded-xl p-2 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <X className="h-5 w-5 text-slate-600" />
+            </button>
+
+            <h2 className="mb-2 text-xl font-black text-slate-900">
+              Enter Your Full Name
+            </h2>
+
+            <p className="mb-5 text-sm leading-6 text-slate-500">
+              This creates your anonymous profile. Your Supabase UID will be saved locally for future records.
+            </p>
+
+            <input
+              value={fullName}
+              disabled={saving}
+              onChange={(e) => {
+                setFullName(e.target.value);
+                if (nameError) setNameError("");
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !saving) handleSubmitName();
+              }}
+              placeholder="Full name"
+              className={`w-full rounded-2xl border px-4 py-3 text-slate-900 outline-none disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400 ${
+                nameError
+                  ? "border-red-400 focus:border-red-500"
+                  : "border-slate-200 focus:border-sky-500"
+              }`}
+            />
+
+            {nameError ? (
+              <p className="mt-2 mb-4 text-sm font-medium text-red-600">
+                {nameError}
+              </p>
+            ) : (
+              <div className="mb-4" />
+            )}
+            
+            <button
+              onClick={handleSubmitName}
+              disabled={saving}
+              className="flex w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-sky-500 to-blue-600 py-3.5 font-semibold text-white shadow-lg shadow-sky-500/30 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {saving && <LoaderCircle className="h-5 w-5 animate-spin" />}
+              {saving ? "Creating profile..." : "Continue"}
+            </button>
+
+            {saving && (
+              <div className="absolute inset-0 flex items-center justify-center rounded-3xl bg-white/75 backdrop-blur-sm">
+                <div className="flex flex-col items-center">
+                  <LoaderCircle className="mb-3 h-8 w-8 animate-spin text-sky-600" />
+                  <p className="text-sm font-semibold text-slate-700">
+                    Saving your profile...
+                  </p>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

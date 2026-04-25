@@ -8,7 +8,10 @@ import {
   LoaderCircle,
 } from "lucide-react";
 import Cropper from "react-easy-crop";
-import * as tf from "@tensorflow/tfjs";
+import * as ort from "onnxruntime-web";
+
+ort.env.wasm.wasmPaths = "/ort/";
+ort.env.wasm.numThreads = 1;
 
 type UploadModalProps = {
   onClose: () => void;
@@ -26,12 +29,15 @@ type PredictionResult = {
   confidence: number;
 };
 
+const MODEL_URL = "/model/model.onnx";
+const CLASS_NAMES_URL = "/model/class_names.json";
+
 export default function UploadModal({ onClose }: UploadModalProps) {
   const cameraInputRef = useRef<HTMLInputElement | null>(null);
   const galleryInputRef = useRef<HTMLInputElement | null>(null);
-  const modelRef = useRef<tf.LayersModel | null>(null);
+  const sessionRef = useRef<ort.InferenceSession | null>(null);
+  const classNamesRef = useRef<string[]>([]);
 
-  const [classNames, setClassNames] = useState<string[]>([]);
   const [imageSrc, setImageSrc] = useState<string | null>(null);
   const [crop, setCrop] = useState({ x: 0, y: 0 });
   const [zoom, setZoom] = useState(1);
@@ -43,43 +49,53 @@ export default function UploadModal({ onClose }: UploadModalProps) {
   const [prediction, setPrediction] = useState<PredictionResult | null>(null);
 
   const loadModel = async () => {
-    if (modelRef.current && classNames.length > 0) return;
+    if (sessionRef.current && classNamesRef.current.length > 0) return;
 
     setLoadingModel(true);
 
     try {
-      await tf.ready();
+      const session = await ort.InferenceSession.create(MODEL_URL, {
+        executionProviders: ["wasm"],
+      });
 
-      const loadedModel = await tf.loadLayersModel("/model/model.json");
-      modelRef.current = loadedModel;
+      sessionRef.current = session;
 
-      const response = await fetch("/model/class_names.json");
-      const classes = await response.json();
+      const response = await fetch(CLASS_NAMES_URL);
 
-      setClassNames(classes);
+      if (!response.ok) {
+        throw new Error("class_names.json not found in public/model/");
+      }
 
-      console.log("Model loaded:", loadedModel);
+      const classes: string[] = await response.json();
+
+      if (!Array.isArray(classes) || classes.length === 0) {
+        throw new Error("class_names.json is empty or invalid.");
+      }
+
+      classNamesRef.current = classes;
+
+      console.log("ONNX model loaded successfully.");
+      console.log("Input names:", session.inputNames);
+      console.log("Output names:", session.outputNames);
       console.log("Class names:", classes);
     } catch (error) {
       console.error("Model loading error:", error);
-      alert("Failed to load model. Check console.");
+      alert("Failed to load ONNX model. Check console.");
     } finally {
       setLoadingModel(false);
     }
   };
 
   const predictImage = async (imageBase64: string) => {
-    if (!modelRef.current || classNames.length === 0) {
-      await loadModel();
+    await loadModel();
+
+    if (!sessionRef.current) {
+      throw new Error("ONNX model is not loaded.");
     }
 
-    if (!modelRef.current) {
-      throw new Error("Model is not loaded.");
+    if (classNamesRef.current.length === 0) {
+      throw new Error("Class names are not loaded.");
     }
-
-    const response = await fetch("/model/class_names.json");
-    const classes: string[] =
-      classNames.length > 0 ? classNames : await response.json();
 
     const img = new Image();
     img.src = imageBase64;
@@ -89,26 +105,48 @@ export default function UploadModal({ onClose }: UploadModalProps) {
       img.onerror = () => reject(new Error("Failed to load cropped image."));
     });
 
-    const inputTensor = tf.tidy(() => {
-      return tf.browser
-        .fromPixels(img)
-        .resizeBilinear([224, 224])
-        .toFloat()
-        .div(255)
-        .expandDims(0);
+    const canvas = document.createElement("canvas");
+    canvas.width = 224;
+    canvas.height = 224;
+
+    const ctx = canvas.getContext("2d");
+
+    if (!ctx) {
+      throw new Error("Canvas is not supported.");
+    }
+
+    ctx.drawImage(img, 0, 0, 224, 224);
+
+    const imageData = ctx.getImageData(0, 0, 224, 224).data;
+    const input = new Float32Array(224 * 224 * 3);
+
+    for (let i = 0; i < 224 * 224; i++) {
+      const r = imageData[i * 4];
+      const g = imageData[i * 4 + 1];
+      const b = imageData[i * 4 + 2];
+
+      // Same as Keras image.img_to_array(img): raw 0–255 RGB values
+      input[i * 3] = r;
+      input[i * 3 + 1] = g;
+      input[i * 3 + 2] = b;
+    }
+
+    const inputName = sessionRef.current.inputNames[0];
+    const outputName = sessionRef.current.outputNames[0];
+
+    const tensor = new ort.Tensor("float32", input, [1, 224, 224, 3]);
+
+    const results = await sessionRef.current.run({
+      [inputName]: tensor,
     });
 
-    const outputTensor = modelRef.current.predict(inputTensor) as tf.Tensor;
-    const scores = Array.from(await outputTensor.data());
-
-    inputTensor.dispose();
-    outputTensor.dispose();
+    const scores = Array.from(results[outputName].data as Float32Array);
 
     const maxScore = Math.max(...scores);
     const maxIndex = scores.indexOf(maxScore);
 
     return {
-      label: classes[maxIndex],
+      label: classNamesRef.current[maxIndex] ?? "Unknown",
       confidence: maxScore,
     };
   };
@@ -127,39 +165,50 @@ export default function UploadModal({ onClose }: UploadModalProps) {
     };
 
     reader.readAsDataURL(file);
+    event.target.value = "";
   };
 
   const createCroppedImage = async () => {
-    if (!imageSrc || !croppedAreaPixels) return;
+    if (!imageSrc || !croppedAreaPixels) {
+      alert("Please crop the prescription first.");
+      return;
+    }
 
     const image = new Image();
     image.src = imageSrc;
 
-    image.onload = () => {
-      const canvas = document.createElement("canvas");
-      const ctx = canvas.getContext("2d");
+    await new Promise<void>((resolve, reject) => {
+      image.onload = () => resolve();
+      image.onerror = () => reject(new Error("Failed to load image."));
+    });
 
-      if (!ctx) return;
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d");
 
-      canvas.width = croppedAreaPixels.width;
-      canvas.height = croppedAreaPixels.height;
+    if (!ctx) {
+      alert("Canvas is not supported.");
+      return;
+    }
 
-      ctx.drawImage(
-        image,
-        croppedAreaPixels.x,
-        croppedAreaPixels.y,
-        croppedAreaPixels.width,
-        croppedAreaPixels.height,
-        0,
-        0,
-        croppedAreaPixels.width,
-        croppedAreaPixels.height
-      );
+    canvas.width = croppedAreaPixels.width;
+    canvas.height = croppedAreaPixels.height;
 
-      const croppedBase64 = canvas.toDataURL("image/jpeg", 0.95);
-      setCroppedImage(croppedBase64);
-      setPrediction(null);
-    };
+    ctx.drawImage(
+      image,
+      croppedAreaPixels.x,
+      croppedAreaPixels.y,
+      croppedAreaPixels.width,
+      croppedAreaPixels.height,
+      0,
+      0,
+      croppedAreaPixels.width,
+      croppedAreaPixels.height
+    );
+
+    const croppedBase64 = canvas.toDataURL("image/jpeg", 0.95);
+
+    setCroppedImage(croppedBase64);
+    setPrediction(null);
   };
 
   const handleUseImage = async () => {
@@ -173,7 +222,6 @@ export default function UploadModal({ onClose }: UploadModalProps) {
 
       const result = await predictImage(croppedImage);
 
-      console.log("Cropped image:", croppedImage);
       console.log("Prediction result:", result);
       console.log("Detected medication:", result.label);
       console.log("Confidence:", `${(result.confidence * 100).toFixed(2)}%`);

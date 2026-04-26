@@ -13,15 +13,16 @@
     "@ant-design/icons": "^6.1.1",
     "@supabase/supabase-js": "^2.104.0",
     "@tailwindcss/vite": "^4.1.18",
-    "@tensorflow/tfjs": "^4.22.0",
     "antd": "^6.3.6",
     "framer-motion": "^12.38.0",
     "lucide-react": "^1.8.0",
+    "onnxruntime-web": "^1.17.3",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-easy-crop": "^5.5.7",
     "react-router-dom": "^7.14.1",
     "tailwindcss": "^4.1.18",
+    "vite-plugin-pwa": "^0.19.8",
     "zustand": "^5.0.12"
   },
   "devDependencies": {

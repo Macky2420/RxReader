@@ -10,6 +10,7 @@ import {
   LoaderCircle,
 } from "lucide-react";
 import { supabase } from "../utils/supabase";
+import { medications } from "../utils/medications";
 
 type Profile = {
   full_name: string;
@@ -19,8 +20,8 @@ type Prescription = {
   id: string;
   user_id: string;
   medication_name: string;
-  dosage: string | null;
   image_url: string | null;
+  confidence: number | null;
   created_at: string;
 };
 
@@ -34,6 +35,12 @@ export default function Dashboard() {
 
   const totalScans = prescriptions.length;
   const latestScan = prescriptions[0]?.created_at;
+
+  const getMedicationInfo = (name: string) => {
+    return medications.find(
+      (med) => med.medication_name.toLowerCase() === name.toLowerCase()
+    );
+  };
 
   const getInitials = (name: string) =>
     name
@@ -90,7 +97,7 @@ export default function Dashboard() {
       const { data: prescriptionData, error: prescriptionError } =
         await supabase
           .from("prescriptions")
-          .select("id, user_id, medication_name, dosage, image_url, created_at")
+          .select("id, user_id, medication_name, image_url, confidence, created_at")
           .eq("user_id", user.id)
           .order("created_at", { ascending: false });
 
@@ -221,42 +228,53 @@ export default function Dashboard() {
                 </div>
               ) : (
                 <div className="space-y-4">
-                  {prescriptions.map((item) => (
-                    <button
-                      onClick={() => navigate(`/prescription/${item.id}`)}
-                      key={item.id}
-                      className="w-full rounded-3xl border border-slate-200 bg-white p-4 text-left shadow-sm transition active:scale-[0.98]"
-                    >
-                      <div className="flex items-start gap-4">
-                        <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-gradient-to-br from-sky-100 to-blue-100">
-                          {item.image_url ? (
-                            <img
-                              src={item.image_url}
-                              alt={item.medication_name}
-                              className="h-full w-full object-cover"
-                            />
-                          ) : (
-                            <FileText className="h-6 w-6 text-sky-600" />
-                          )}
-                        </div>
+                  {prescriptions.map((item) => {
+                    const medicationInfo = getMedicationInfo(item.medication_name);
 
-                        <div className="min-w-0 flex-1">
-                          <h3 className="mb-1 truncate font-bold text-slate-900">
-                            {item.medication_name}
-                          </h3>
+                    return (
+                      <button
+                        onClick={() => navigate(`/prescription/${item.id}`)}
+                        key={item.id}
+                        className="w-full rounded-3xl border border-slate-200 bg-white p-4 text-left shadow-sm transition active:scale-[0.98]"
+                      >
+                        <div className="flex items-start gap-4">
+                          <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-gradient-to-br from-sky-100 to-blue-100">
+                            {item.image_url ? (
+                              <img
+                                src={item.image_url}
+                                alt={item.medication_name}
+                                className="h-full w-full object-cover"
+                              />
+                            ) : (
+                              <FileText className="h-6 w-6 text-sky-600" />
+                            )}
+                          </div>
 
-                          <p className="mb-3 text-sm text-slate-500">
-                            {item.dosage || "No dosage provided"}
-                          </p>
+                          <div className="min-w-0 flex-1">
+                            <h3 className="mb-1 truncate font-bold text-slate-900">
+                              {item.medication_name}
+                            </h3>
 
-                          <div className="flex items-center gap-1.5 text-sm text-slate-400">
-                            <Calendar className="h-4 w-4" />
-                            {formatDate(item.created_at)}
+                            <p className="mb-1 text-sm text-slate-500">
+                              {medicationInfo?.dosage || "Dosage info not found"}
+                            </p>
+
+                            <p className="mb-3 text-sm text-slate-500">
+                              Confidence:{" "}
+                              {item.confidence !== null
+                                ? `${(item.confidence * 100).toFixed(2)}%`
+                                : "N/A"}
+                            </p>
+
+                            <div className="flex items-center gap-1.5 text-sm text-slate-400">
+                              <Calendar className="h-4 w-4" />
+                              {formatDate(item.created_at)}
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    </button>
-                  ))}
+                      </button>
+                    );
+                  })}
                 </div>
               )}
             </section>

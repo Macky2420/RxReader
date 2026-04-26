@@ -202,23 +202,23 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
                       <div className="flex-1 rounded-2xl border border-white/15 bg-white/10 p-3 backdrop-blur-xl">
                         <div className="grid h-full grid-cols-2 gap-2">
                           {medications.slice(0, 10).map((med, index) => {
-                            const label = typeof med === "string" ? med : "";
+                              const label = med.medication_name;
 
-                            return (
-                              <motion.div
-                                key={label || index}
-                                initial={{ opacity: 0, y: 10 }}
-                                animate={{ opacity: 1, y: 0 }}
-                                transition={{ delay: index * 0.02 }}
-                                className="flex min-h-[42px] items-center gap-2 rounded-xl border border-white/12 bg-white/10 px-2.5 py-2 shadow-sm backdrop-blur-md"
-                              >
-                                <div className="h-1.5 w-1.5 flex-shrink-0 rounded-full bg-sky-300" />
-                                <span className="text-[11px] leading-4 text-white/90 sm:text-xs">
-                                  {label}
-                                </span>
-                              </motion.div>
-                            );
-                          })}
+                              return (
+                                <motion.div
+                                  key={label || index}
+                                  initial={{ opacity: 0, y: 10 }}
+                                  animate={{ opacity: 1, y: 0 }}
+                                  transition={{ delay: index * 0.02 }}
+                                  className="flex min-h-[42px] items-center gap-2 rounded-xl border border-white/12 bg-white/10 px-2.5 py-2 shadow-sm backdrop-blur-md"
+                                >
+                                  <div className="h-1.5 w-1.5 flex-shrink-0 rounded-full bg-sky-300" />
+                                  <span className="text-[11px] leading-4 text-white/90 sm:text-xs">
+                                    {label}
+                                  </span>
+                                </motion.div>
+                              );
+                            })}
                         </div>
                       </div>
                     </div>

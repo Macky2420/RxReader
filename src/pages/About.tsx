@@ -6,9 +6,13 @@ import {
   HelpCircle,
   AlertTriangle,
   Microscope,
+  Pill,
+  ListChecks,
+  ShieldAlert,
 } from "lucide-react";
 import { supabase } from "../utils/supabase";
 import { researchStudy } from "../utils/researchTeam";
+import { medications } from "../utils/medications";
 
 export default function About() {
   const navigate = useNavigate();
@@ -22,7 +26,6 @@ export default function About() {
       } = await supabase.auth.getUser();
 
       if (!user) return;
-
     };
 
     loadProfile();
@@ -39,7 +42,6 @@ export default function About() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-sky-50 to-blue-50">
-      {/* Header */}
       <div className="sticky top-0 z-10 flex items-center border-b border-slate-200/60 bg-white/80 px-4 py-4 backdrop-blur-md">
         <button
           onClick={() => navigate(-1)}
@@ -52,7 +54,6 @@ export default function About() {
       </div>
 
       <div className="mx-auto max-w-md space-y-6 px-6 pb-10 pt-6">
-        {/* App Info */}
         <div className="rounded-3xl bg-gradient-to-br from-sky-500 to-blue-600 p-6 shadow-xl shadow-sky-500/20">
           <div className="mb-4 flex items-center">
             <div className="mr-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-white/20 backdrop-blur-sm">
@@ -67,12 +68,11 @@ export default function About() {
 
           <p className="leading-relaxed text-white/90">
             AI-powered handwritten prescription recognition system that converts
-            medical prescriptions into digital, structured data for research,
-            tracking, and documentation.
+            selected medicine names from prescription images into digital,
+            structured records for academic research and documentation.
           </p>
         </div>
 
-        {/* Research Study */}
         <div>
           <h3 className="mb-4 px-1 text-sm uppercase tracking-wide text-slate-500">
             Research Study
@@ -108,13 +108,84 @@ export default function About() {
           </div>
         </div>
 
-        {/* Information */}
+        <div>
+          <h3 className="mb-4 px-1 text-sm uppercase tracking-wide text-slate-500">
+            Detectable Medications
+          </h3>
+
+          <div className="rounded-3xl border border-slate-200/60 bg-white p-5 shadow-sm">
+            <div className="mb-4 flex items-center gap-3">
+              <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-sky-100">
+                <Pill className="h-6 w-6 text-sky-600" />
+              </div>
+
+              <div>
+                <h4 className="font-bold text-slate-900">
+                  Trained Medication Classes
+                </h4>
+                <p className="text-sm text-slate-500">
+                  {medications.length} medications supported
+                </p>
+              </div>
+            </div>
+
+            <div className="max-h-[360px] space-y-3 overflow-y-auto pr-1">
+              {medications.map((med) => (
+                <div
+                  key={med.medication_name}
+                  className="flex items-center gap-3 rounded-2xl border border-slate-100 bg-slate-50 p-3"
+                >
+                  <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-white">
+                    <img
+                      src={med.image_url}
+                      alt={med.medication_name}
+                      className="h-full w-full object-contain p-1"
+                    />
+                  </div>
+
+                  <div className="min-w-0">
+                    <p className="truncate font-semibold text-slate-900">
+                      {med.medication_name}
+                    </p>
+                    <p className="truncate text-xs text-slate-500">
+                      {med.dosage}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <p className="mt-3 text-center text-xs text-slate-400">
+              Scroll inside the list to view all supported medications.
+            </p>
+          </div>
+        </div>
+
+        <div className="rounded-3xl border border-amber-200 bg-amber-50 p-5">
+          <div className="mb-3 flex items-center gap-3">
+            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-amber-100">
+              <ListChecks className="h-6 w-6 text-amber-700" />
+            </div>
+
+            <h4 className="font-bold text-amber-950">Model Limitation</h4>
+          </div>
+
+          <p className="text-sm leading-6 text-amber-900">
+            The model is trained only on the listed medication classes. It was
+            not trained to reliably detect other handwritten words, non-medical
+            handwriting, or unsupported prescriptions. Because of limited
+            datasets, especially from Calbayog General Hospital, unsupported
+            handwriting may still be misinterpreted as one of the supported
+            medications. Always verify the result manually.
+          </p>
+        </div>
+
         <div>
           <h3 className="mb-4 px-1 text-sm uppercase tracking-wide text-slate-500">
             Information
           </h3>
 
-          <div className="overflow-hidden rounded-3xl border border-slate-200/60 bg-white shadow-sm divide-y divide-slate-100">
+          <div className="divide-y divide-slate-100 overflow-hidden rounded-3xl border border-slate-200/60 bg-white shadow-sm">
             <button
               onClick={() => setShowHelp(true)}
               className="flex w-full items-center px-6 py-5 transition-colors hover:bg-slate-50 active:bg-slate-100"
@@ -152,7 +223,6 @@ export default function About() {
         </div>
       </div>
 
-      {/* Help Modal */}
       {showHelp && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-6 backdrop-blur-sm">
           <div className="max-h-[80vh] w-full max-w-sm overflow-y-auto rounded-3xl bg-white p-6 shadow-2xl">
@@ -176,7 +246,7 @@ export default function About() {
                 },
                 {
                   title: "AI Processing",
-                  desc: "The AI processes the cropped image and extracts medication details.",
+                  desc: "The AI processes the cropped image and predicts one of the supported medication classes.",
                 },
                 {
                   title: "View Records",
@@ -206,7 +276,7 @@ export default function About() {
 
             <button
               onClick={() => setShowHelp(false)}
-              className="w-full rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-500 px-6 py-3.5 text-white shadow-lg shadow-emerald-500/30"
+              className="w-full rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-500 px-6 py-3.5 font-bold text-white shadow-lg shadow-emerald-500/30"
             >
               Got it
             </button>
@@ -214,12 +284,11 @@ export default function About() {
         </div>
       )}
 
-      {/* Disclaimer Modal */}
       {showDisclaimer && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-6 backdrop-blur-sm">
           <div className="max-h-[80vh] w-full max-w-sm overflow-y-auto rounded-3xl bg-white p-6 shadow-2xl">
             <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-amber-500 to-orange-500 shadow-lg">
-              <AlertTriangle className="h-8 w-8 text-white" />
+              <ShieldAlert className="h-8 w-8 text-white" />
             </div>
 
             <h3 className="mb-4 text-center text-lg font-bold text-slate-900">
@@ -235,8 +304,9 @@ export default function About() {
               </p>
 
               <p>
-                Extracted information may contain inaccuracies due to handwriting
-                variations, image quality, or model limitations.
+                The model only supports the listed medication classes. It may
+                misinterpret unsupported handwriting or unclear images as one of
+                those medications due to dataset limitations.
               </p>
 
               <p>
@@ -251,11 +321,16 @@ export default function About() {
                 </p>
               </div>
             </div>
+
+            <button
+              onClick={() => setShowDisclaimer(false)}
+              className="w-full rounded-2xl bg-gradient-to-r from-amber-500 to-orange-500 px-6 py-3.5 font-bold text-white shadow-lg shadow-amber-500/30"
+            >
+              Got it
+            </button>
           </div>
         </div>
       )}
-
-  
     </div>
   );
 }

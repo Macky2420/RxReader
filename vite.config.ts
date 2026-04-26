@@ -9,6 +9,7 @@ export default defineConfig({
     tailwindcss(),
     VitePWA({
       registerType: "autoUpdate",
+
       manifest: {
         name: "RxReader",
         short_name: "RxReader",
@@ -35,6 +36,15 @@ export default defineConfig({
             purpose: "any maskable",
           },
         ],
+      },
+
+      workbox: {
+        // Do not precache ONNX Runtime WASM files.
+        // They are too large and should load only when needed.
+        globIgnores: ["**/ort/**"],
+
+        // Optional: allows normal assets up to 5MB.
+        maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
       },
     }),
   ],

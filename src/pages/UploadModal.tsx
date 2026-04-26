@@ -13,12 +13,8 @@ import {
   ShieldAlert,
 } from "lucide-react";
 import Cropper from "react-easy-crop";
-import * as ort from "onnxruntime-web";
 import { medications } from "../utils/medications";
 import { supabase } from "../utils/supabase";
-
-ort.env.wasm.wasmPaths = "/ort/";
-ort.env.wasm.numThreads = 1;
 
 type UploadModalProps = {
   onClose: () => void;
@@ -52,7 +48,10 @@ const BUCKET_NAME = "medication_image";
 export default function UploadModal({ onClose }: UploadModalProps) {
   const cameraInputRef = useRef<HTMLInputElement | null>(null);
   const galleryInputRef = useRef<HTMLInputElement | null>(null);
-  const sessionRef = useRef<ort.InferenceSession | null>(null);
+
+  // Lazy-loaded ONNX session
+  const sessionRef = useRef<any>(null);
+  const ortRef = useRef<any>(null);
   const classNamesRef = useRef<string[]>([]);
 
   const [imageSrc, setImageSrc] = useState<string | null>(null);
@@ -161,6 +160,13 @@ export default function UploadModal({ onClose }: UploadModalProps) {
     setLoadingModel(true);
 
     try {
+      const ort = await import("onnxruntime-web");
+
+      ort.env.wasm.wasmPaths = "/ort/";
+      ort.env.wasm.numThreads = 1;
+
+      ortRef.current = ort;
+
       const session = await ort.InferenceSession.create(MODEL_URL, {
         executionProviders: ["wasm"],
       });
@@ -181,7 +187,7 @@ export default function UploadModal({ onClose }: UploadModalProps) {
 
       classNamesRef.current = classes;
 
-      console.log("ONNX model loaded successfully.");
+      console.log("ONNX model loaded lazily.");
       console.log("Input names:", session.inputNames);
       console.log("Output names:", session.outputNames);
       console.log("Class names:", classes);
@@ -195,7 +201,7 @@ export default function UploadModal({ onClose }: UploadModalProps) {
   ): Promise<PredictionResult> => {
     await loadModel();
 
-    if (!sessionRef.current) {
+    if (!sessionRef.current || !ortRef.current) {
       throw new Error("ONNX model is not loaded.");
     }
 
@@ -216,6 +222,7 @@ export default function UploadModal({ onClose }: UploadModalProps) {
     canvas.height = 224;
 
     const ctx = canvas.getContext("2d");
+
     if (!ctx) {
       throw new Error("Canvas is not supported.");
     }
@@ -238,7 +245,12 @@ export default function UploadModal({ onClose }: UploadModalProps) {
     const inputName = sessionRef.current.inputNames[0];
     const outputName = sessionRef.current.outputNames[0];
 
-    const tensor = new ort.Tensor("float32", input, [1, 224, 224, 3]);
+    const tensor = new ortRef.current.Tensor("float32", input, [
+      1,
+      224,
+      224,
+      3,
+    ]);
 
     const results = await sessionRef.current.run({
       [inputName]: tensor,
@@ -342,9 +354,6 @@ export default function UploadModal({ onClose }: UploadModalProps) {
     event.target.value = "";
 
     if (!file) return;
-
-    console.log("Selected file type:", file.type);
-    console.log("Selected file size MB:", file.size / 1024 / 1024);
 
     if (!file.type.startsWith("image/")) {
       setErrorMessage("Please upload an image file only.");
@@ -458,7 +467,8 @@ export default function UploadModal({ onClose }: UploadModalProps) {
       }
 
       const foundMedication = medications.find(
-        (med) => med.medication_name.toLowerCase() === result.label.toLowerCase()
+        (med) =>
+          med.medication_name.toLowerCase() === result.label.toLowerCase()
       );
 
       if (!foundMedication) {

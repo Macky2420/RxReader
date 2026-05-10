@@ -11,7 +11,7 @@ export default function ErrorPage() {
     <div className="min-h-screen flex items-center justify-center bg-slate-50 px-6">
       <div className="max-w-md w-full text-center bg-white p-8 rounded-2xl shadow">
         <h1 className="text-6xl font-bold text-red-500">{code}</h1>
-
+    
         <p className="mt-4 text-gray-600">{message}</p>
 
         <Link

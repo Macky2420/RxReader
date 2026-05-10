@@ -69,47 +69,47 @@ export default function Dashboard() {
   };
 
   const loadDashboardData = async () => {
-    try {
-      setLoading(true);
+  try {
+    setLoading(true);
 
-      const {
-        data: { user },
-        error: userError,
-      } = await supabase.auth.getUser();
+    const uid = localStorage.getItem("rxreader_uid");
+    const fullName = localStorage.getItem("rxreader_full_name");
 
-      if (userError) throw userError;
-
-      if (!user) {
-        navigate("/", { replace: true });
-        return;
-      }
-
-      const { data: profileData, error: profileError } = await supabase
-        .from("profiles")
-        .select("full_name")
-        .eq("id", user.id)
-        .single();
-
-      if (profileError) throw profileError;
-
-      setProfile(profileData);
-
-      const { data: prescriptionData, error: prescriptionError } =
-        await supabase
-          .from("prescriptions")
-          .select("id, user_id, medication_name, image_url, confidence, created_at")
-          .eq("user_id", user.id)
-          .order("created_at", { ascending: false });
-
-      if (prescriptionError) throw prescriptionError;
-
-      setPrescriptions(prescriptionData || []);
-    } catch (error) {
-      console.error("Dashboard fetch error:", error);
-    } finally {
-      setLoading(false);
+    if (!uid) {
+      navigate("/", { replace: true });
+      return;
     }
-  };
+
+    setProfile({ full_name: fullName || "User" });
+
+    const { data: profileData, error: profileError } = await supabase
+      .from("profiles")
+      .select("full_name")
+      .eq("id", uid)
+      .maybeSingle();
+
+    if (profileError) throw profileError;
+
+    if (profileData?.full_name) {
+      setProfile(profileData);
+      localStorage.setItem("rxreader_full_name", profileData.full_name);
+    }
+
+    const { data: prescriptionData, error: prescriptionError } = await supabase
+      .from("prescriptions")
+      .select("id, user_id, medication_name, image_url, confidence, created_at")
+      .eq("user_id", uid)
+      .order("created_at", { ascending: false });
+
+    if (prescriptionError) throw prescriptionError;
+
+    setPrescriptions(prescriptionData || []);
+  } catch (error) {
+    console.error("Dashboard fetch error:", error);
+  } finally {
+    setLoading(false);
+  }
+};
 
   useEffect(() => {
     loadDashboardData();

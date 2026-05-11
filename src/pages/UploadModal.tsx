@@ -1,4 +1,4 @@
-import { useRef, useState, useEffect, useCallback } from "react";
+import { useRef, useState, useEffect } from "react";
 import {
   X,
   UploadCloud,
@@ -18,9 +18,10 @@ import {
   Type,
   Search,
   Crosshair,
+  HelpCircle,
+  ArrowRight,
 } from "lucide-react";
 import Cropper from "react-easy-crop";
-import { createWorker, type Worker } from "tesseract.js";
 import { medications } from "../utils/medications";
 import { supabase } from "../utils/supabase";
 
@@ -49,150 +50,323 @@ type StoredPrescription = {
   created_at: string;
 };
 
-// Bounding box for detected text regions from REAL OCR
 type DetectedRegion = {
   id: number;
-  x: number;      // percentage 0-100
-  y: number;      // percentage 0-100
-  width: number;  // percentage 0-100
-  height: number; // percentage 0-100
+  x: number;
+  y: number;
+  width: number;
+  height: number;
   label: string;
   confidence: number;
-  isMatched?: boolean;      // true if this word matches a medication
-  matchedMedication?: string; // the medication name it matched to
-  matchScore?: number;      // similarity score 0-1
+  isMatched?: boolean;
+  matchedMedication?: string;
+  matchScore?: number;
 };
 
-const MODEL_URL = "/model/model.onnx";
+type Suggestion = {
+  className: string;
+  score: number;
+  matchedWord: string;
+};
+
 const CLASS_NAMES_URL = "/model/class_names.json";
 const BUCKET_NAME = "medication_image";
 
-// Simple fuzzy string similarity (Levenshtein-based)
-function getSimilarity(str1: string, str2: string): number {
-  const s1 = str1.toLowerCase().trim();
-  const s2 = str2.toLowerCase().trim();
+// Generic words that appear on prescription forms but ARE NOT medications
+const GENERIC_BLOCKLIST = new Set([
+  "confidence", "date", "location", "page", "name", "address", "patient",
+  "doctor", "dr", "prescription", "rx", "pharmacy", "hospital", "clinic",
+  "signature", "stamp", "tel", "phone", "fax", "email", "id", "no", "number",
+  "qty", "quantity", "refill", "refills", "directions", "instructions", "dosage",
+  "take", "tablet", "tablets", "capsule", "capsules", "mg", "ml", "mcg", "g",
+  "daily", "twice", "three", "times", "day", "week", "month", "as", "needed",
+  "prn", "oral", "topical", "injection", "route", "form", "generic", "brand",
+  "substitution", "allowed", "daw", "dispense", "label", "caution", "warning",
+  "storage", "temp", "temperature", "room", "refrigerate", "shake", "well",
+  "before", "using", "use", "discard", "after", "expiration", "exp", "lot",
+  "mfg", "manufactured", "by", "for", "from", "to", "of", "the", "and", "or",
+  "a", "an", "in", "on", "at", "with", "without", "per", "every", "hours",
+  "hour", "min", "minutes", "sec", "am", "pm", "bid", "tid", "qid", "qd",
+  "qhs", "q4h", "q6h", "q8h", "q12h", "ac", "pc", "hs", "prn", "stat",
+  "continued", "cont", "sig", "disp", "qty", "mitte", "ft", "fiat",
+  "licensed", "practitioner", "npi", "dea", "pin", "bin", "pcn", "grp",
+  "group", "member", "policy", "claim", "insurance", "copay", "deductible",
+  "total", "amount", "paid", "balance", "due", "cash", "check", "card",
+  "visa", "mastercard", "discover", "amex", "payment", "method", "change",
+  "thank", "you", "please", "call", "questions", "concerns", "side", "effects",
+  "may", "include", "nausea", "dizziness", "drowsiness", "headache", "pain",
+  "allergic", "reaction", "rash", "itching", "swelling", "trouble", "breathing",
+  "keep", "out", "reach", "children", "pets", "poison", "control", "emergency",
+  "overdose", "accidental", "ingestion", "contact", "immediately", "if",
+  "pregnant", "nursing", "consult", "physician", "before", "taking",
+  "alcohol", "while", "this", "medication", "may", "cause", "do", "not",
+  "drive", "operate", "heavy", "machinery", "until", "know", "how", "affects",
+  "complete", "full", "course", "even", "if", "feel", "better", "stop",
+  "unless", "directed", "healthcare", "provider", "provider", "professional",
+  "medical", "advice", "diagnosis", "treatment", "information", "educational",
+  "purposes", "only", "not", "intended", "replace", "consultation",
+  "registered", "trademark", "tm", "r", "copyright", "all", "rights",
+  "reserved", "version", "print", "printed", "computer", "generated",
+  "system", "software", "program", "user", "login", "password", "access",
+  "restricted", "authorized", "personnel", "only", "confidential", "private",
+  "protected", "hipaa", "compliant", "secure", "encrypted", "ssl", "https",
+  "www", "com", "org", "net", "gov", "edu", "http", "url", "website",
+  "online", "portal", "account", "profile", "settings", "preferences",
+  "help", "support", "faq", "terms", "conditions", "privacy", "policy",
+  "agreement", "consent", "release", "waiver", "liability", "disclaimer",
+  "notice", "warning", "caution", "danger", "poison", "flammable", "corrosive",
+  "biohazard", "radioactive", "infectious", "sterile", "clean", "aseptic",
+  "technique", "universal", "precautions", "ppe", "gloves", "mask", "gown",
+  "shield", "goggles", "wash", "hands", "sanitize", "disinfect", "sterilize",
+  "autoclave", "incinerate", "dispose", "properly", "sharps", "container",
+  "biohazard", "bag", "red", "bag", "waste", "recycle", "reusable",
+  "single", "use", "only", "disposable", "latex", "free", "non", "sterile",
+  "for", "external", "internal", "use", "only", "not", "for", "injection",
+  "iv", "im", "subcut", "subcutaneous", "intravenous", "intramuscular",
+  "intrathecal", "epidural", "inhalation", "nasal", "ophthalmic", "otic",
+  "rectal", "vaginal", "transdermal", "patch", "cream", "ointment", "gel",
+  "lotion", "solution", "suspension", "emulsion", "syrup", "elixir", "tincture",
+  "extract", "suppository", "enema", "douche", "spray", "aerosol", "inhaler",
+  "nebulizer", "mask", "tubing", "cannula", "catheter", "syringe", "needle",
+  "gauge", "length", "ml", "cc", "unit", "units", "iu", "meq", "mmol",
+  "mcg", "mg", "g", "kg", "lb", "lbs", "oz", "fl", "fluid", "dram", "minim",
+  "drop", "drops", "gtt", "gtts", "tsp", "tbsp", "cup", "pt", "qt", "gal",
+  "liter", "litre", "milliliter", "microliter", "nanogram", "picogram",
+  "molar", "normal", "percent", "solution", "w", "v", "w/v", "v/v",
+  "ratio", "part", "parts", "dilution", "concentrated", "stock", "working",
+  "final", "volume", "mass", "weight", "molecular", "formula", "structure",
+  "compound", "mixture", "element", "ion", "salt", "base", "acid", "alkaline",
+  "ph", "buffer", "preservative", "antioxidant", "stabilizer", "excipient",
+  "filler", "binder", "disintegrant", "lubricant", "coating", "color", "dye",
+  "flavor", "sweetener", "sugar", "alcohol", "sorbitol", "mannitol", "glycol",
+  "peg", "polysorbate", "tween", "benzyl", "alcohol", "paraben", "sulfite",
+  "tartrazine", "fd", "c", "red", "blue", "yellow", "green", "lake",
+  "gluten", "lactose", "soy", "peanut", "tree", "nut", "shellfish", "egg",
+  "milk", "dairy", "wheat", "corn", "starch", "gelatin", "povidone",
+  "crospovidone", "croscarmellose", "sodium", "starch", "glycolate",
+  "magnesium", "stearate", "talc", "silica", "titanium", "dioxide",
+  "iron", "oxide", "calcium", "phosphate", "tribasic", "dibasic",
+  "monobasic", "anhydrous", "hydrous", "monohydrate", "dihydrate",
+  "trihydrate", "pentahydrate", "decahydrate", "anhyd", "aq", "aqueous",
+  "soln", "susp", "emul", "elix", "tinc", "ext", "supp", "inj", "tab",
+  "cap", "dr", "ec", "sr", "xr", "cr", "la", "er", "ir", "sa", "td",
+  "sl", "bucc", "odt", "eff", "chew", "disp", "sol", "odf", "film",
+  "strip", "loz", "troche", "pastille", "gum", "implant", "pellet",
+  "bead", "granule", "powder", "crystals", "flake", "chunk", "block",
+  "cake", "tablet", "pill", "capsule", "caplet", "softgel", "gelcap",
+  "minicap", "microcap", "nanocap", "span", "spanule", "duret", "durette",
+  "repetab", "repeatab", "sequels", "contin", "continus", "retard",
+  "slow", "release", "controlled", "delayed", "extended", "prolonged",
+  "sustained", "timed", "repeat", "action", "dual", "triple", "layer",
+  "core", "shell", "matrix", "reservoir", "osmotic", "pump", "ion",
+  "exchange", "complex", "clathrate", "inclusion", "micelle", "liposome",
+  "niosome", "ethosome", "transferosome", "phytosome", "cyclodextrin",
+  "nanoparticle", "microparticle", "microsphere", "nanosphere",
+  "microcapsule", "nanocapsule", "dendrimer", "fullerene", "carbon",
+  "nanotube", "quantum", "dot", "lipid", "bilayer", "vesicle", "cell",
+  "ghost", "erythrocyte", "leukocyte", "platelet", "stem", "progenitor",
+  "fibroblast", "keratinocyte", "melanocyte", "hepatocyte", "cardiomyocyte",
+  "neuron", "glial", "astrocyte", "oligodendrocyte", "microglia",
+  "ependymal", "schwann", "satellite", "enteric", "goblet", "paneth",
+  "chief", "parietal", "oxyntic", "enterochromaffin", "ec", "cell",
+  "duodenal", "brush", "border", "mucosal", "submucosal", "muscularis",
+  "serosal", "adventitial", "mesothelial", "endothelial", "epithelial",
+  "squamous", "cuboidal", "columnar", "pseudostratified", "transitional",
+  "simple", "stratified", "keratinized", "nonkeratinized", "glandular",
+  "exocrine", "endocrine", "holocrine", "apocrine", "merocrine", "eccrine",
+  "sebaceous", "sudoriferous", "ceruminous", "mammary", "lacrimal",
+  "salivary", "parotid", "submandibular", "sublingual", "pancreatic",
+  "hepatic", "biliary", "gallbladder", "cystic", "common", "bile", "duct",
+  "ampulla", "vater", "sphincter", "oddi", "hepatopancreatic", "duodenal",
+  "papilla", "minor", "major", "santorini", "ductus", "choledochus",
+  "hepaticus", "communis", "dexter", "sinister", "lobus", "quadratus",
+  "caudatus", "spigelii", "lobulus", "quadratus", "caudatus", "processus",
+  "caudatus", "papillary", "process", "left", "right", "lateral", "medial",
+  "superior", "inferior", "anterior", "posterior", "dorsal", "ventral",
+  "proximal", "distal", "superficial", "deep", "external", "internal",
+  "central", "peripheral", "ipsilateral", "contralateral", "bilateral",
+  "unilateral", "midline", "paramedian", "parasagittal", "frontal",
+  "coronal", "sagittal", "transverse", "horizontal", "oblique", "longitudinal",
+  "axial", "radial", "ulnar", "tibial", "fibular", "femoral", "brachial",
+  "antebrachial", "crural", "sural", "pedal", "plantar", "palmar", "dorsal",
+  "digital", "phalangeal", "carpal", "tarsal", "metacarpal", "metatarsal",
+  "costal", "vertebral", "spinal", "cranial", "cerebral", "cerebellar",
+  "brainstem", "midbrain", "pons", "medulla", "oblongata", "diencephalon",
+  "thalamus", "hypothalamus", "epithalamus", "subthalamus", "metathalamus",
+  "pituitary", "pineal", "hypophysis", "adenohypophysis", "neurohypophysis",
+  "pars", "distalis", "intermedia", "tuberalis", "nervosa", "infundibular",
+  "stalk", "median", "eminence", "tuber", "cinereum", "mamillary",
+  "bodies", "posterior", "lobe", "anterior", "lobe", "intermediate",
+  "lobe", "neural", "lobe", "pars", "nervosa", "intermedia", "distalis",
+]);
 
-  if (s1 === s2) return 1.0;
+function normalizeText(text: string): string {
+  return text
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\x00-\x7F]/g, " ")
+    .replace(/[^a-zA-Z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
 
-  // Check if one contains the other
-  if (s1.includes(s2) || s2.includes(s1)) {
-    const longer = Math.max(s1.length, s2.length);
-    const shorter = Math.min(s1.length, s2.length);
-    return shorter / longer;
+function levenshteinDistance(str1: string, str2: string): number {
+  const m = str1.length;
+  const n = str2.length;
+  const dp: number[][] = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0));
+
+  for (let i = 0; i <= m; i++) dp[i][0] = i;
+  for (let j = 0; j <= n; j++) dp[0][j] = j;
+
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      if (str1[i - 1] === str2[j - 1]) {
+        dp[i][j] = dp[i - 1][j - 1];
+      } else {
+        dp[i][j] = Math.min(
+          dp[i - 1][j] + 1,
+          dp[i][j - 1] + 1,
+          dp[i - 1][j - 1] + 1
+        );
+      }
+    }
+  }
+  return dp[m][n];
+}
+
+function wordMatchScore(ocrWord: string, classWord: string): number {
+  const o = normalizeText(ocrWord);
+  const c = normalizeText(classWord);
+
+  if (o === c) return 1.0;
+
+  // Reject if OCR word is generic blocklisted
+  if (GENERIC_BLOCKLIST.has(o)) return 0;
+
+  if (o.length >= 3 && c.length >= 3) {
+    let prefixMatch = 0;
+    for (let i = 0; i < Math.min(o.length, c.length); i++) {
+      if (o[i] === c[i]) prefixMatch++;
+      else break;
+    }
+    const prefixScore = prefixMatch / Math.max(o.length, c.length);
+
+    const maxLen = Math.max(o.length, c.length);
+    const distance = levenshteinDistance(o, c);
+    const levScore = 1 - distance / maxLen;
+
+    return Math.max(levScore, prefixScore * 0.9);
   }
 
-  // Word-level matching
-  const words1 = s1.split(/\s+/);
-  const words2 = s2.split(/\s+/);
+  const maxLen = Math.max(o.length, c.length);
+  if (maxLen === 0) return 0;
+  return 1 - levenshteinDistance(o, c) / maxLen;
+}
 
-  let matches = 0;
-  for (const w1 of words1) {
-    for (const w2 of words2) {
-      if (w1 === w2 || (w1.length > 3 && w2.length > 3 && 
-          (w1.includes(w2) || w2.includes(w1)))) {
-        matches++;
-        break;
+function findBestClassNameMatch(ocrText: string, classNames: string[]): { className: string | null; score: number; matchedWord: string } {
+  const normalizedOCR = normalizeText(ocrText);
+  const ocrWords = normalizedOCR.split(/\s+/).filter(w => w.length >= 3 && !GENERIC_BLOCKLIST.has(w));
+
+  // If no valid medication-like words found, fail immediately
+  if (ocrWords.length === 0) {
+    return { className: null, score: 0, matchedWord: "" };
+  }
+
+  let bestClass: string | null = null;
+  let bestScore = 0;
+  let bestMatchedWord = "";
+
+  for (const className of classNames) {
+    const normalizedClass = normalizeText(className);
+    const classWords = normalizedClass.split(/\s+/).filter(w => w.length >= 3);
+
+    for (const ocrWord of ocrWords) {
+      for (const classWord of classWords) {
+        const score = wordMatchScore(ocrWord, classWord);
+        const lengthBoost = classWord.length <= 6 ? 0.05 : 0;
+        const adjustedScore = Math.min(1, score + lengthBoost);
+
+        if (adjustedScore > bestScore) {
+          bestScore = adjustedScore;
+          bestClass = className;
+          bestMatchedWord = ocrWord;
+        }
       }
     }
   }
 
-  return matches / Math.max(words1.length, words2.length);
+  return { className: bestClass, score: bestScore, matchedWord: bestMatchedWord };
 }
 
-// Find best matching medication from OCR text
-function findBestMedicationMatch(ocrText: string): { medication: typeof medications[0] | null; score: number; matchedWords: string[] } {
-  const ocrLower = ocrText.toLowerCase();
-  const ocrWords = ocrLower.split(/[^a-z0-9]+/).filter(w => w.length > 2);
+// Get top N suggestions — but ONLY for non-generic OCR words
+function getSuggestions(ocrText: string, classNames: string[], topN: number = 3): Suggestion[] {
+  const normalizedOCR = normalizeText(ocrText);
+  const ocrWords = normalizedOCR.split(/\s+/).filter(w => w.length >= 2 && !GENERIC_BLOCKLIST.has(w));
 
-  let bestMatch = null;
-  let bestScore = 0;
-  let matchedWords: string[] = [];
+  // If ALL words are generic, return empty — no suggestions
+  if (ocrWords.length === 0) return [];
 
-  for (const med of medications) {
-    const medName = med.medication_name.toLowerCase();
-    const medWords = medName.split(/[^a-z0-9]+/).filter(w => w.length > 2);
+  const scored: Suggestion[] = [];
 
-    let score = 0;
-    const currentMatched: string[] = [];
+  for (const className of classNames) {
+    const normalizedClass = normalizeText(className);
+    const classWords = normalizedClass.split(/\s+/).filter(w => w.length >= 2);
 
-    for (const medWord of medWords) {
-      for (const ocrWord of ocrWords) {
-        const sim = getSimilarity(medWord, ocrWord);
-        if (sim > 0.7) {
-          score += sim;
-          currentMatched.push(ocrWord);
+    let bestScore = 0;
+    let bestWord = "";
+
+    for (const ocrWord of ocrWords) {
+      for (const classWord of classWords) {
+        const score = wordMatchScore(ocrWord, classWord);
+        if (score > bestScore) {
+          bestScore = score;
+          bestWord = ocrWord;
         }
       }
     }
 
-    // Normalize score
-    score = score / Math.max(medWords.length, 1);
+    const fullScore = wordMatchScore(normalizedOCR, normalizedClass);
+    const finalScore = Math.max(bestScore, fullScore * 0.8);
 
-    if (score > bestScore) {
-      bestScore = score;
-      bestMatch = med;
-      matchedWords = currentMatched;
+    if (finalScore > 0.20) {
+      scored.push({ className, score: finalScore, matchedWord: bestWord });
     }
   }
 
-  return { medication: bestMatch, score: bestScore, matchedWords };
+  return scored
+    .sort((a, b) => b.score - a.score)
+    .slice(0, topN);
 }
 
 export default function UploadModal({ onClose }: UploadModalProps) {
   const cameraInputRef = useRef<HTMLInputElement | null>(null);
   const galleryInputRef = useRef<HTMLInputElement | null>(null);
-
-  const sessionRef = useRef<any>(null);
-  const ortRef = useRef<any>(null);
   const classNamesRef = useRef<string[]>([]);
-  const tesseractWorkerRef = useRef<Worker | null>(null);
 
   const [imageSrc, setImageSrc] = useState<string | null>(null);
   const [crop, setCrop] = useState({ x: 0, y: 0 });
   const [zoom, setZoom] = useState(1);
-  const [croppedAreaPixels, setCroppedAreaPixels] =
-    useState<CroppedAreaPixels | null>(null);
+  const [croppedAreaPixels, setCroppedAreaPixels] = useState<CroppedAreaPixels | null>(null);
   const [croppedImage, setCroppedImage] = useState<string | null>(null);
-
   const [loadingImage, setLoadingImage] = useState(false);
-  const [loadingModel, setLoadingModel] = useState(false);
   const [predicting, setPredicting] = useState(false);
   const [storing, setStoring] = useState(false);
-
   const [prediction, setPrediction] = useState<PredictionResult | null>(null);
-  const [storedPrescription, setStoredPrescription] =
-    useState<StoredPrescription | null>(null);
-  const [detailsPrescription, setDetailsPrescription] =
-    useState<StoredPrescription | null>(null);
-
+  const [storedPrescription, setStoredPrescription] = useState<StoredPrescription | null>(null);
+  const [detailsPrescription, setDetailsPrescription] = useState<StoredPrescription | null>(null);
   const [showMedicationModal, setShowMedicationModal] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-
-  // Detection animation states
   const [scanPhase, setScanPhase] = useState<"idle" | "scanning" | "reading" | "matching" | "detected">("idle");
   const [detectedRegions, setDetectedRegions] = useState<DetectedRegion[]>([]);
   const [scanLineY, setScanLineY] = useState(0);
   const [showCharacterHighlight, setShowCharacterHighlight] = useState(false);
   const [ocrText, setOcrText] = useState<string>("");
-  const [matchInfo, setMatchInfo] = useState<{ score: number; method: string; ocrSimilarity?: number } | null>(null);
+  const [matchInfo, setMatchInfo] = useState<{ score: number; method: string } | null>(null);
 
-  // Initialize Tesseract worker lazily
-  const getTesseractWorker = useCallback(async (): Promise<Worker> => {
-    if (tesseractWorkerRef.current) return tesseractWorkerRef.current;
-
-    const worker = await createWorker("eng");
-    tesseractWorkerRef.current = worker;
-    return worker;
-  }, []);
-
-  // Cleanup worker on unmount
-  useEffect(() => {
-    return () => {
-      if (tesseractWorkerRef.current) {
-        tesseractWorkerRef.current.terminate();
-      }
-    };
-  }, []);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
+  const [pendingOCRText, setPendingOCRText] = useState("");
 
   const resetAll = () => {
     setImageSrc(null);
@@ -202,6 +376,9 @@ export default function UploadModal({ onClose }: UploadModalProps) {
     setDetailsPrescription(null);
     setErrorMessage(null);
     setShowMedicationModal(false);
+    setShowSuggestions(false);
+    setSuggestions([]);
+    setPendingOCRText("");
     setCrop({ x: 0, y: 0 });
     setZoom(1);
     setScanPhase("idle");
@@ -212,17 +389,10 @@ export default function UploadModal({ onClose }: UploadModalProps) {
   };
 
   const getCurrentUser = async () => {
-    const {
-      data: { user },
-      error,
-    } = await supabase.auth.getUser();
-
+    const { data: { user }, error } = await supabase.auth.getUser();
     if (error || !user) {
-      throw new Error(
-        "User is not authenticated. Please complete onboarding first."
-      );
+      throw new Error("User is not authenticated. Please complete onboarding first.");
     }
-
     return user;
   };
 
@@ -230,21 +400,12 @@ export default function UploadModal({ onClose }: UploadModalProps) {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
       const img = new Image();
-
-      reader.onload = () => {
-        img.src = reader.result as string;
-      };
-
-      reader.onerror = () => {
-        reject(new Error("Failed to read image file."));
-      };
-
+      reader.onload = () => { img.src = reader.result as string; };
+      reader.onerror = () => reject(new Error("Failed to read image file."));
       img.onload = () => {
         const maxSize = 1280;
-
         let width = img.width;
         let height = img.height;
-
         if (width > height && width > maxSize) {
           height = Math.round((height * maxSize) / width);
           width = maxSize;
@@ -252,298 +413,93 @@ export default function UploadModal({ onClose }: UploadModalProps) {
           width = Math.round((width * maxSize) / height);
           height = maxSize;
         }
-
         const canvas = document.createElement("canvas");
         canvas.width = width;
         canvas.height = height;
-
         const ctx = canvas.getContext("2d");
-
-        if (!ctx) {
-          reject(new Error("Canvas is not supported."));
-          return;
-        }
-
+        if (!ctx) { reject(new Error("Canvas is not supported.")); return; }
         ctx.drawImage(img, 0, 0, width, height);
-
-        const resizedBase64 = canvas.toDataURL("image/jpeg", 0.85);
-        resolve(resizedBase64);
+        resolve(canvas.toDataURL("image/jpeg", 0.85));
       };
-
-      img.onerror = () => {
-        reject(new Error("Failed to load image."));
-      };
-
+      img.onerror = () => reject(new Error("Failed to load image."));
       reader.readAsDataURL(file);
     });
   };
 
-  const loadModel = async () => {
-    if (sessionRef.current && classNamesRef.current.length > 0) return;
-
-    setLoadingModel(true);
-
-    try {
-      const ort = await import("onnxruntime-web");
-
-      ort.env.wasm.wasmPaths = "/ort/";
-      ort.env.wasm.numThreads = 1;
-
-      ortRef.current = ort;
-
-      const session = await ort.InferenceSession.create(MODEL_URL, {
-        executionProviders: ["wasm"],
-      });
-
-      sessionRef.current = session;
-
-      const response = await fetch(CLASS_NAMES_URL);
-
-      if (!response.ok) {
-        throw new Error("class_names.json not found in public/model/");
-      }
-
-      const classes: string[] = await response.json();
-
-      if (!Array.isArray(classes) || classes.length === 0) {
-        throw new Error("class_names.json is empty or invalid.");
-      }
-
-      classNamesRef.current = classes;
-
-      console.log("ONNX model loaded lazily.");
-      console.log("Input names:", session.inputNames);
-      console.log("Output names:", session.outputNames);
-      console.log("Class names:", classes);
-    } finally {
-      setLoadingModel(false);
-    }
+  const loadClassNames = async () => {
+    if (classNamesRef.current.length > 0) return;
+    const response = await fetch(CLASS_NAMES_URL);
+    if (!response.ok) throw new Error("class_names.json not found in public/model/");
+    const classes: string[] = await response.json();
+    if (!Array.isArray(classes) || classes.length === 0) throw new Error("class_names.json is empty or invalid.");
+    classNamesRef.current = classes;
+    console.log("Class names loaded:", classes);
   };
 
-  // REAL OCR: Run Tesseract.js on the cropped image
-  const runOCR = async (imageBase64: string): Promise<DetectedRegion[]> => {
-    const worker = await getTesseractWorker();
-
-    const img = new Image();
-    img.src = imageBase64;
-    await new Promise<void>((resolve, reject) => {
-      img.onload = () => resolve();
-      img.onerror = () => reject(new Error("Failed to load image for OCR"));
+  const runGoogleOCR = async (imageBase64: string): Promise<{ regions: DetectedRegion[]; fullText: string }> => {
+    const { data, error } = await supabase.functions.invoke("ocr", {
+      body: { imageBase64 },
     });
 
-    const imgWidth = img.width;
-    const imgHeight = img.height;
+    if (error) {
+      throw new Error(`OCR function error: ${error.message}`);
+    }
 
-    const result = await worker.recognize(imageBase64, {}, { blocks: true });
+    if (data?.error) {
+      throw new Error(data.error);
+    }
 
-    console.log("Tesseract result keys:", Object.keys(result.data));
-
-    const fullText = result.data.text;
+    const fullText = data.fullText || "";
     setOcrText(fullText);
-    console.log("OCR Full Text:", fullText);
+    console.log("Google OCR Full Text:", fullText);
+    console.log("Google OCR regions:", data.regions?.length);
 
-    const regions: DetectedRegion[] = [];
+    const regions = (data.regions || []).map((r: any, idx: number) => ({
+      id: r.id ?? idx,
+      x: r.x ?? 0,
+      y: r.y ?? 0,
+      width: r.width ?? 0,
+      height: r.height ?? 0,
+      label: r.label ?? "",
+      confidence: r.confidence ?? 0.95,
+    }));
 
-    // Extract words from nested blocks structure
-    if (result.data.blocks) {
-      result.data.blocks.forEach((block: any, blockIdx: number) => {
-        if (block.paragraphs) {
-          block.paragraphs.forEach((paragraph: any, paraIdx: number) => {
-            if (paragraph.lines) {
-              paragraph.lines.forEach((line: any, lineIdx: number) => {
-                if (line.words) {
-                  line.words.forEach((word: any, wordIdx: number) => {
-                    let x0, y0, x1, y1;
-
-                    if (word.bbox && typeof word.bbox === 'object') {
-                      x0 = word.bbox.x0 ?? word.bbox.x ?? 0;
-                      y0 = word.bbox.y0 ?? word.bbox.y ?? 0;
-                      x1 = word.bbox.x1 ?? ((word.bbox.x !== undefined && word.bbox.width !== undefined) ? word.bbox.x + word.bbox.width : undefined) ?? 0;
-                      y1 = word.bbox.y1 ?? ((word.bbox.y !== undefined && word.bbox.height !== undefined) ? word.bbox.y + word.bbox.height : undefined) ?? 0;
-                    }
-
-                    if (x0 !== undefined && x1 !== undefined && y0 !== undefined && y1 !== undefined) {
-                      regions.push({
-                        id: blockIdx * 10000 + paraIdx * 1000 + lineIdx * 100 + wordIdx,
-                        x: (x0 / imgWidth) * 100,
-                        y: (y0 / imgHeight) * 100,
-                        width: ((x1 - x0) / imgWidth) * 100,
-                        height: ((y1 - y0) / imgHeight) * 100,
-                        label: word.text || "",
-                        confidence: (word.confidence ?? 0) / 100,
-                      });
-                    }
-                  });
-                }
-              });
-            }
-          });
-        }
-      });
-    }
-
-    // Fallback to direct words array
-    const ocrData: any = result.data;
-    if (regions.length === 0 && ocrData.words) {
-      ocrData.words.forEach((word: any, idx: number) => {
-        let x0, y0, x1, y1;
-
-        if (word.bbox && typeof word.bbox === 'object') {
-          x0 = word.bbox.x0 ?? 0;
-          y0 = word.bbox.y0 ?? 0;
-          x1 = word.bbox.x1 ?? 0;
-          y1 = word.bbox.y1 ?? 0;
-        }
-
-        if (x0 !== undefined && x1 !== undefined) {
-          regions.push({
-            id: idx,
-            x: (x0 / imgWidth) * 100,
-            y: (y0 / imgHeight) * 100,
-            width: ((x1 - x0) / imgWidth) * 100,
-            height: ((y1 - y0) / imgHeight) * 100,
-            label: word.text || "",
-            confidence: (word.confidence ?? 0) / 100,
-          });
-        }
-      });
-    }
-
-    console.log("OCR regions generated:", regions.length);
-    return regions;
-  };
-
-  const predictImage = async (
-    imageBase64: string
-  ): Promise<PredictionResult> => {
-    await loadModel();
-
-    if (!sessionRef.current || !ortRef.current) {
-      throw new Error("ONNX model is not loaded.");
-    }
-
-    if (classNamesRef.current.length === 0) {
-      throw new Error("Class names are not loaded.");
-    }
-
-    const img = new Image();
-    img.src = imageBase64;
-
-    await new Promise<void>((resolve, reject) => {
-      img.onload = () => resolve();
-      img.onerror = () => reject(new Error("Failed to load image."));
-    });
-
-    const canvas = document.createElement("canvas");
-    canvas.width = 224;
-    canvas.height = 224;
-
-    const ctx = canvas.getContext("2d");
-
-    if (!ctx) {
-      throw new Error("Canvas is not supported.");
-    }
-
-    ctx.drawImage(img, 0, 0, 224, 224);
-
-    const imageData = ctx.getImageData(0, 0, 224, 224).data;
-    const input = new Float32Array(224 * 224 * 3);
-
-    for (let i = 0; i < 224 * 224; i++) {
-      const r = imageData[i * 4];
-      const g = imageData[i * 4 + 1];
-      const b = imageData[i * 4 + 2];
-
-      input[i * 3] = r;
-      input[i * 3 + 1] = g;
-      input[i * 3 + 2] = b;
-    }
-
-    const inputName = sessionRef.current.inputNames[0];
-    const outputName = sessionRef.current.outputNames[0];
-
-    const tensor = new ortRef.current.Tensor("float32", input, [
-      1,
-      224,
-      224,
-      3,
-    ]);
-
-    const results = await sessionRef.current.run({
-      [inputName]: tensor,
-    });
-
-    const scores = Array.from(results[outputName].data as Float32Array);
-    const maxScore = Math.max(...scores);
-    const maxIndex = scores.indexOf(maxScore);
-
-    return {
-      label: classNamesRef.current[maxIndex] ?? "Unknown",
-      confidence: maxScore,
-    };
+    return { regions, fullText };
   };
 
   const dataURLtoBlob = (dataUrl: string) => {
     const arr = dataUrl.split(",");
     const mime = arr[0].match(/:(.*?);/)?.[1] || "image/jpeg";
     const bstr = atob(arr[1]);
-
     let n = bstr.length;
     const u8arr = new Uint8Array(n);
-
-    while (n--) {
-      u8arr[n] = bstr.charCodeAt(n);
-    }
-
+    while (n--) u8arr[n] = bstr.charCodeAt(n);
     return new Blob([u8arr], { type: mime });
   };
 
   const uploadPrescriptionCapture = async (imageBase64: string) => {
     const user = await getCurrentUser();
-
     const blob = dataURLtoBlob(imageBase64);
     const fileName = `${user.id}/${Date.now()}_prescription.jpg`;
-
-    const { error } = await supabase.storage
-      .from(BUCKET_NAME)
-      .upload(fileName, blob, {
-        contentType: "image/jpeg",
-        upsert: false,
-      });
-
+    const { error } = await supabase.storage.from(BUCKET_NAME).upload(fileName, blob, {
+      contentType: "image/jpeg",
+      upsert: false,
+    });
     if (error) throw error;
-
     const { data } = supabase.storage.from(BUCKET_NAME).getPublicUrl(fileName);
-
-    return {
-      publicUrl: data.publicUrl,
-      userId: user.id,
-    };
+    return { publicUrl: data.publicUrl, userId: user.id };
   };
 
-  const savePrescriptionToSupabase = async (
-    medicationName: string,
-    confidence: number,
-    imageBase64: string
-  ) => {
+  const savePrescriptionToSupabase = async (medicationName: string, confidence: number, imageBase64: string) => {
     setStoring(true);
-
     try {
       const { publicUrl, userId } = await uploadPrescriptionCapture(imageBase64);
-
       const { data, error } = await supabase
         .from("prescriptions")
-        .insert({
-          user_id: userId,
-          medication_name: medicationName,
-          image_url: publicUrl,
-          confidence,
-        })
+        .insert({ user_id: userId, medication_name: medicationName, image_url: publicUrl, confidence })
         .select("id, user_id, medication_name, image_url, confidence, created_at")
         .single();
-
       if (error) throw error;
-
       setStoredPrescription(data);
       return data as StoredPrescription;
     } finally {
@@ -557,43 +513,34 @@ export default function UploadModal({ onClose }: UploadModalProps) {
       .select("id, user_id, medication_name, image_url, confidence, created_at")
       .eq("id", prescriptionId)
       .single();
-
     if (error) throw error;
-
     setDetailsPrescription(data);
     setShowMedicationModal(true);
   };
 
-  const handleFileChange = async (
-    event: React.ChangeEvent<HTMLInputElement>
-  ) => {
+  const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     event.target.value = "";
-
     if (!file) return;
-
     if (!file.type.startsWith("image/")) {
       setErrorMessage("Please upload an image file only.");
       return;
     }
-
     if (file.size > 15 * 1024 * 1024) {
       setErrorMessage("Image is too large. Please retake the photo.");
       return;
     }
-
     try {
       setLoadingImage(true);
       setErrorMessage(null);
-
       const resizedBase64 = await resizeImageFile(file);
-
       setImageSrc(resizedBase64);
       setCroppedImage(null);
       setPrediction(null);
       setStoredPrescription(null);
       setDetailsPrescription(null);
       setErrorMessage(null);
+      setShowSuggestions(false);
       setCrop({ x: 0, y: 0 });
       setZoom(1);
     } catch (error) {
@@ -609,54 +556,81 @@ export default function UploadModal({ onClose }: UploadModalProps) {
       alert("Please crop the prescription first.");
       return;
     }
-
     const image = new Image();
     image.src = imageSrc;
-
     await new Promise<void>((resolve, reject) => {
       image.onload = () => resolve();
       image.onerror = () => reject(new Error("Failed to load image."));
     });
-
     const canvas = document.createElement("canvas");
     const ctx = canvas.getContext("2d");
-
-    if (!ctx) {
-      alert("Canvas is not supported.");
-      return;
-    }
-
+    if (!ctx) { alert("Canvas is not supported."); return; }
     canvas.width = croppedAreaPixels.width;
     canvas.height = croppedAreaPixels.height;
-
     ctx.drawImage(
       image,
       croppedAreaPixels.x,
       croppedAreaPixels.y,
       croppedAreaPixels.width,
       croppedAreaPixels.height,
-      0,
-      0,
+      0, 0,
       croppedAreaPixels.width,
       croppedAreaPixels.height
     );
-
     const croppedBase64 = canvas.toDataURL("image/jpeg", 0.9);
-
     setCroppedImage(croppedBase64);
     setPrediction(null);
     setStoredPrescription(null);
     setDetailsPrescription(null);
     setErrorMessage(null);
+    setShowSuggestions(false);
   };
 
-  // UPDATED: OCR-first flow with medication matching
+  const handleSuggestionSelect = async (suggestion: Suggestion) => {
+    setShowSuggestions(false);
+    setScanPhase("matching");
+
+    const className = suggestion.className;
+    const boostedConfidence = Math.max(0.75, suggestion.score);
+
+    const matchedMedication = medications.find(
+      (med) => med.medication_name.toLowerCase() === className.toLowerCase()
+    );
+
+    if (!matchedMedication) {
+      setPrediction(null);
+      setStoredPrescription(null);
+      setScanPhase("idle");
+      setErrorMessage(`Detected "${className}", but no matching medication information was found.`);
+      return;
+    }
+
+    setPrediction({
+      label: className,
+      confidence: boostedConfidence,
+    });
+
+    setMatchInfo({ score: boostedConfidence, method: "OCR Suggestion Match" });
+
+    setScanPhase("detected");
+    setShowCharacterHighlight(true);
+
+    await savePrescriptionToSupabase(className, boostedConfidence, croppedImage!);
+  };
+
+  const handleNoSuggestion = () => {
+    setShowSuggestions(false);
+    setPrediction(null);
+    setStoredPrescription(null);
+    setScanPhase("idle");
+    setErrorMessage("Sorry, it's below 50% confidence.");
+  };
+
   const handleUseImage = async () => {
     if (!croppedImage) {
       alert("Please crop the prescription first.");
       return;
     }
-
     if (storedPrescription) {
       try {
         await fetchPrescriptionDetails(storedPrescription.id);
@@ -670,449 +644,287 @@ export default function UploadModal({ onClose }: UploadModalProps) {
     try {
       setPredicting(true);
       setErrorMessage(null);
+      setShowSuggestions(false);
       setScanPhase("scanning");
 
-      // Phase 1: Scanning animation
       await new Promise(resolve => setTimeout(resolve, 2000));
       setScanPhase("reading");
 
-      // Phase 2: Run REAL OCR
-      const ocrRegions = await runOCR(croppedImage);
-      console.log("OCR detected regions:", ocrRegions);
+      await loadClassNames();
 
-      // Phase 3: Match OCR text against medications
+      const { regions: ocrRegions, fullText: ocrFullText } = await runGoogleOCR(croppedImage);
+      console.log("Google OCR detected regions:", ocrRegions);
+      console.log("OCR text for matching:", ocrFullText);
+
       setScanPhase("matching");
-      const { medication: matchedMed, score: matchScore, matchedWords } = findBestMedicationMatch(ocrText);
 
-      console.log("OCR Match:", matchedMed?.medication_name, "Score:", matchScore);
-      console.log("Matched words:", matchedWords);
+      const { className: matchedClass, score: matchScore, matchedWord } = findBestClassNameMatch(ocrFullText, classNamesRef.current);
+      console.log("Matched class:", matchedClass, "Score:", matchScore, "Word:", matchedWord);
 
-      // Mark regions that matched medication words
       const enhancedRegions = ocrRegions.map(region => {
-        const regionText = region.label.toLowerCase().trim();
-        let bestWordScore = 0;
-        let matchedMedName = "";
-
-        if (matchedMed) {
-          const medWords = matchedMed.medication_name.toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length > 2);
-          for (const medWord of medWords) {
-            const sim = getSimilarity(regionText, medWord);
-            if (sim > bestWordScore) {
-              bestWordScore = sim;
-              matchedMedName = matchedMed.medication_name;
-            }
-          }
-        }
-
+        const regionText = normalizeText(region.label);
+        const classLower = matchedClass ? normalizeText(matchedClass) : "";
+        const sim = matchedClass ? wordMatchScore(regionText, classLower) : 0;
         return {
           ...region,
-          isMatched: bestWordScore > 0.6,
-          matchedMedication: bestWordScore > 0.6 ? matchedMedName : undefined,
-          matchScore: bestWordScore,
+          isMatched: sim > 0.5,
+          matchedMedication: sim > 0.5 ? matchedClass : undefined,
+          matchScore: sim,
         };
       });
-
       setDetectedRegions(enhancedRegions);
 
-      // Phase 4: Also run ONNX model as backup/validation
-      let finalResult: PredictionResult;
-      let finalMedication = matchedMed ?? null;
+      // HIGH CONFIDENCE: Auto-approve
+      if (matchedClass && matchScore > 0.5) {
+        const matchedMedication = medications.find(
+          (med) => med.medication_name.toLowerCase() === matchedClass.toLowerCase()
+        );
 
-      if (matchedMed && matchScore > 0.5) {
-        // OCR found a good match - use it!
-        finalResult = {
-          label: matchedMed.medication_name,
-          confidence: Math.min(matchScore * 1.2, 0.98), // Scale up but cap at 98%
-        };
-        setMatchInfo({ score: matchScore, method: "OCR Text Match" });
-      } else {
-        // OCR didn't find match well - fallback to ONNX model
-        const onnxResult = await predictImage(croppedImage);
-
-        if (onnxResult.confidence < 0.5) {
+        if (!matchedMedication) {
           setPrediction(null);
           setStoredPrescription(null);
           setScanPhase("idle");
-          setErrorMessage(
-            "Sorry, please make sure the medication is clear. The confidence is below 50%."
-          );
+          setErrorMessage(`Detected "${matchedClass}", but no matching medication information was found.`);
           return;
         }
 
-        finalResult = {
-          label: onnxResult.label,
-          confidence: onnxResult.confidence,
-        };
-        finalMedication = medications.find(
-          (med) => med.medication_name.toLowerCase() === onnxResult.label.toLowerCase()
-        ) ?? null;
-        setMatchInfo({ score: onnxResult.confidence, method: "ONNX Model" });
-      }
+        setPrediction({
+          label: matchedClass,
+          confidence: matchScore,
+        });
 
-      if (!finalMedication) {
-        setPrediction(null);
-        setStoredPrescription(null);
-        setScanPhase("idle");
-        setErrorMessage(
-          `Detected "${finalResult.label}", but no matching medication information was found in medications.ts.`
-        );
+        setMatchInfo({ score: matchScore, method: "OCR Text Match" });
+
+        setScanPhase("detected");
+        setShowCharacterHighlight(true);
+
+        await savePrescriptionToSupabase(matchedClass, matchScore, croppedImage);
         return;
       }
 
-      setPrediction({
-        label: finalMedication.medication_name,
-        confidence: finalResult.confidence,
-      });
+      // MEDIUM CONFIDENCE: Show "Did you mean?" suggestions
+      // But only if there are valid non-generic words in OCR
+      if (matchScore > 0.25) {
+        const suggs = getSuggestions(ocrFullText, classNamesRef.current, 3);
+        console.log("Suggestions:", suggs);
 
-      setScanPhase("detected");
-      setShowCharacterHighlight(true);
+        // Only show suggestions if at least one has decent score
+        if (suggs.length > 0 && suggs[0].score > 0.30) {
+          setSuggestions(suggs);
+          setPendingOCRText(ocrFullText);
+          setShowSuggestions(true);
+          setScanPhase("idle");
+          return;
+        }
+      }
 
-      await savePrescriptionToSupabase(
-        finalMedication.medication_name,
-        finalResult.confidence,
-        croppedImage
-      );
+      // LOW CONFIDENCE or ALL GENERIC WORDS: Fail
+      setPrediction(null);
+      setStoredPrescription(null);
+      setScanPhase("idle");
+      setErrorMessage("Sorry, it's below 50% confidence.");
+
     } catch (error) {
       console.error("Prediction error:", error);
       setScanPhase("idle");
-      setErrorMessage(
-        error instanceof Error
-          ? error.message
-          : "Prediction failed. Please try again."
-      );
+      setErrorMessage(error instanceof Error ? error.message : "Prediction failed. Please try again.");
     } finally {
       setPredicting(false);
     }
   };
 
-  // Animated scan line effect
   useEffect(() => {
     if (scanPhase !== "scanning") return;
-
     let animationId: number;
-    let startTime = Date.now();
-
+    const startTime = Date.now();
     const animate = () => {
       const elapsed = Date.now() - startTime;
       const progress = (elapsed % 2000) / 2000;
       setScanLineY(progress * 100);
       animationId = requestAnimationFrame(animate);
     };
-
     animationId = requestAnimationFrame(animate);
     return () => cancelAnimationFrame(animationId);
   }, [scanPhase]);
 
-  const isBusy = predicting || loadingModel || storing || loadingImage;
+  const isBusy = predicting || storing || loadingImage;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
-      <div
-        onClick={() => {
-          if (!isBusy) onClose();
-        }}
-        className="absolute inset-0 bg-black/50 backdrop-blur-sm"
-      />
-
+      <div onClick={() => { if (!isBusy && !showSuggestions) onClose(); }} className="absolute inset-0 bg-black/50 backdrop-blur-sm" />
       <div className="relative w-full max-w-md rounded-3xl bg-white p-5 shadow-2xl">
-        <button
-          onClick={onClose}
-          disabled={isBusy}
-          className="absolute right-4 top-4 rounded-xl p-2 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
-        >
+        <button onClick={onClose} disabled={isBusy || showSuggestions} className="absolute right-4 top-4 rounded-xl p-2 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50">
           <X className="h-5 w-5 text-slate-600" />
         </button>
+
+        {/* DID YOU MEAN? SUGGESTIONS MODAL */}
+        {showSuggestions && (
+          <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <HelpCircle className="h-5 w-5 text-amber-600" />
+              <h3 className="font-bold text-amber-900">Did you mean?</h3>
+            </div>
+            <p className="text-sm text-amber-700 mb-3">
+              We detected: <span className="font-mono font-bold">"{pendingOCRText}"</span>
+            </p>
+            <div className="space-y-2">
+              {suggestions.map((sugg, idx) => (
+                <button
+                  key={idx}
+                  onClick={() => handleSuggestionSelect(sugg)}
+                  disabled={isBusy}
+                  className="w-full flex items-center justify-between rounded-xl bg-white border border-amber-200 px-4 py-3 hover:bg-amber-100 transition-colors disabled:opacity-50"
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="text-lg font-bold text-amber-900">{sugg.className}</span>
+                    <span className="text-xs text-amber-600">(matched: "{sugg.matchedWord}")</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className="h-2 w-16 overflow-hidden rounded-full bg-amber-200">
+                      <div className="h-full rounded-full bg-amber-500" style={{ width: `${sugg.score * 100}%` }} />
+                    </div>
+                    <span className="text-xs font-bold text-amber-700">{(sugg.score * 100).toFixed(0)}%</span>
+                    <ArrowRight className="h-4 w-4 text-amber-600" />
+                  </div>
+                </button>
+              ))}
+            </div>
+            <button
+              onClick={handleNoSuggestion}
+              disabled={isBusy}
+              className="mt-3 w-full rounded-xl bg-slate-100 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-200 disabled:opacity-50"
+            >
+              None of these — it's not in the list
+            </button>
+          </div>
+        )}
 
         {!imageSrc ? (
           <div className="flex flex-col items-center text-center">
             <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-sky-500 to-blue-600">
               <UploadCloud className="h-8 w-8 text-white" />
             </div>
-
-            <h2 className="mb-2 text-lg font-bold text-slate-900">
-              Upload Prescription
-            </h2>
-
-            <p className="mb-6 text-sm text-slate-500">
-              Take a photo or upload a prescription image, then crop the
-              prescription area.
-            </p>
-
+            <h2 className="mb-2 text-lg font-bold text-slate-900">Upload Prescription</h2>
+            <p className="mb-6 text-sm text-slate-500">Take a photo or upload a prescription image, then crop the prescription area.</p>
             {errorMessage && (
               <div className="mb-4 w-full rounded-2xl border border-red-200 bg-red-50 p-4">
-                <p className="text-sm font-semibold text-red-900">
-                  {errorMessage}
-                </p>
+                <p className="text-sm font-semibold text-red-900">{errorMessage}</p>
               </div>
             )}
-
-            <input
-              ref={cameraInputRef}
-              type="file"
-              accept="image/jpeg,image/png,image/webp"
-              capture="environment"
-              className="hidden"
-              onChange={handleFileChange}
-            />
-
-            <input
-              ref={galleryInputRef}
-              type="file"
-              accept="image/jpeg,image/png,image/webp"
-              className="hidden"
-              onChange={handleFileChange}
-            />
-
+            <input ref={cameraInputRef} type="file" accept="image/jpeg,image/png,image/webp" capture="environment" className="hidden" onChange={handleFileChange} />
+            <input ref={galleryInputRef} type="file" accept="image/jpeg,image/png,image/webp" className="hidden" onChange={handleFileChange} />
             <div className="w-full space-y-3">
-              <button
-                onClick={() => cameraInputRef.current?.click()}
-                disabled={loadingImage}
-                className="flex w-full items-center justify-center gap-2 rounded-xl bg-sky-500 py-3 font-semibold text-white disabled:opacity-60"
-              >
-                {loadingImage ? (
-                  <>
-                    <LoaderCircle className="h-5 w-5 animate-spin" />
-                    Loading image...
-                  </>
-                ) : (
-                  <>
-                    <Camera className="h-5 w-5" />
-                    Take Photo
-                  </>
-                )}
+              <button onClick={() => cameraInputRef.current?.click()} disabled={loadingImage} className="flex w-full items-center justify-center gap-2 rounded-xl bg-sky-500 py-3 font-semibold text-white disabled:opacity-60">
+                {loadingImage ? <><LoaderCircle className="h-5 w-5 animate-spin" />Loading image...</> : <><Camera className="h-5 w-5" />Take Photo</>}
               </button>
-
-              <button
-                onClick={() => galleryInputRef.current?.click()}
-                disabled={loadingImage}
-                className="flex w-full items-center justify-center gap-2 rounded-xl bg-slate-100 py-3 font-semibold text-slate-700 disabled:opacity-60"
-              >
-                <ImageIcon className="h-5 w-5" />
-                Upload from Gallery
+              <button onClick={() => galleryInputRef.current?.click()} disabled={loadingImage} className="flex w-full items-center justify-center gap-2 rounded-xl bg-slate-100 py-3 font-semibold text-slate-700 disabled:opacity-60">
+                <ImageIcon className="h-5 w-5" />Upload from Gallery
               </button>
             </div>
           </div>
         ) : (
           <div>
-            <h2 className="mb-2 text-center text-lg font-bold text-slate-900">
-              Crop Prescription
-            </h2>
-
-            <p className="mb-4 text-center text-sm text-slate-500">
-              Adjust the crop area to include only the prescription text.
-            </p>
-
+            <h2 className="mb-2 text-center text-lg font-bold text-slate-900">Crop Prescription</h2>
+            <p className="mb-4 text-center text-sm text-slate-500">Adjust the crop area to include only the prescription text.</p>
             {!croppedImage ? (
               <>
                 <div className="relative h-[360px] w-full overflow-hidden rounded-2xl bg-slate-900">
-                  <Cropper
-                    image={imageSrc}
-                    crop={crop}
-                    zoom={zoom}
-                    aspect={4 / 3}
-                    onCropChange={setCrop}
-                    onZoomChange={setZoom}
-                    onCropComplete={(_, croppedPixels) =>
-                      setCroppedAreaPixels(croppedPixels)
-                    }
-                  />
+                  <Cropper image={imageSrc} crop={crop} zoom={zoom} aspect={4 / 3} onCropChange={setCrop} onZoomChange={setZoom} onCropComplete={(_, croppedPixels) => setCroppedAreaPixels(croppedPixels)} />
                 </div>
-
                 <div className="mt-4">
-                  <label className="mb-2 block text-sm font-medium text-slate-700">
-                    Zoom
-                  </label>
-                  <input
-                    type="range"
-                    min={1}
-                    max={3}
-                    step={0.1}
-                    value={zoom}
-                    onChange={(e) => setZoom(Number(e.target.value))}
-                    className="w-full"
-                  />
+                  <label className="mb-2 block text-sm font-medium text-slate-700">Zoom</label>
+                  <input type="range" min={1} max={3} step={0.1} value={zoom} onChange={(e) => setZoom(Number(e.target.value))} className="w-full" />
                 </div>
-
                 <div className="mt-5 flex gap-3">
-                  <button
-                    onClick={resetAll}
-                    className="w-full rounded-xl bg-slate-100 py-3 font-semibold text-slate-700"
-                  >
-                    Back
-                  </button>
-
-                  <button
-                    onClick={createCroppedImage}
-                    className="w-full rounded-xl bg-sky-500 py-3 font-semibold text-white"
-                  >
-                    Crop
-                  </button>
+                  <button onClick={resetAll} className="w-full rounded-xl bg-slate-100 py-3 font-semibold text-slate-700">Back</button>
+                  <button onClick={createCroppedImage} className="w-full rounded-xl bg-sky-500 py-3 font-semibold text-white">Crop</button>
                 </div>
               </>
             ) : (
               <>
-                {/* Character result display - ABOVE the scan image */}
                 {showCharacterHighlight && prediction && (
                   <div className="mb-2 rounded-lg bg-gradient-to-r from-cyan-900/40 to-blue-900/40 border border-cyan-500/50 px-3 py-2 text-center backdrop-blur-sm">
                     <div className="flex items-center justify-center gap-1.5 mb-0.5">
                       <Sparkles className="h-3 w-3 text-cyan-400 animate-pulse" />
                       <p className="text-[8px] font-bold uppercase tracking-[0.1em] text-cyan-300">
-                        {matchInfo?.method === "OCR Text Match" ? "OCR Match" : "CHARACTER RECOGNITION"}
+                        {matchInfo?.method === "OCR Suggestion Match" ? "SUGGESTION MATCH" : "CHARACTER MATCH"}
                       </p>
                       <Sparkles className="h-3 w-3 text-cyan-400 animate-pulse" />
                     </div>
-
-                    <h3 className="text-lg font-black uppercase tracking-widest text-white drop-shadow-[0_0_10px_rgba(34,211,238,0.8)]">
-                      {prediction.label}
-                    </h3>
-
+                    <h3 className="text-lg font-black uppercase tracking-widest text-white drop-shadow-[0_0_10px_rgba(34,211,238,0.8)]">{prediction.label}</h3>
                     <div className="mt-1 flex flex-col items-center gap-0.5">
                       <div className="flex items-center gap-1.5">
                         <div className="h-1 w-16 overflow-hidden rounded-full bg-slate-700">
-                          <div 
-                            className="h-full rounded-full bg-gradient-to-r from-cyan-400 to-blue-500 transition-all duration-1000"
-                            style={{ width: `${prediction.confidence * 100}%` }}
-                          />
+                          <div className="h-full rounded-full bg-gradient-to-r from-cyan-400 to-blue-500 transition-all duration-1000" style={{ width: `${prediction.confidence * 100}%` }} />
                         </div>
-                        <p className="text-[9px] font-semibold text-cyan-200">
-                          {(prediction.confidence * 100).toFixed(1)}%
-                        </p>
+                        <p className="text-[9px] font-semibold text-cyan-200">{(prediction.confidence * 100).toFixed(1)}%</p>
                       </div>
                       {matchInfo && (
-                        <div className="flex flex-col items-center gap-0.5">
-                          <p className="text-[7px] text-cyan-400/80 font-mono">
-                            {matchInfo.method}
-                          </p>
-                          {matchInfo.method === "ONNX + OCR Validation" && (
-                            <p className="text-[7px] text-emerald-400/80 font-mono font-bold">
-                              ✓ {(matchInfo.ocrSimilarity! * 100).toFixed(0)}% match
-                            </p>
-                          )}
-                        </div>
+                        <p className="text-[7px] text-cyan-400/80 font-mono">{matchInfo.method}</p>
                       )}
                     </div>
                   </div>
                 )}
 
-                {/* === ENHANCED SCAN DISPLAY WITH OCR + MEDICATION MATCHING === */}
                 <div className="relative overflow-hidden rounded-2xl border-2 border-cyan-500/50 bg-black shadow-[0_0_30px_rgba(6,182,212,0.3)]">
-                  {/* Base image with thermal/scan effect */}
-                  <img
-                    src={croppedImage}
-                    alt="Thermal processed prescription scan"
-                    className="max-h-[340px] w-full object-contain opacity-70 mix-blend-screen contrast-200 saturate-200 hue-rotate-180"
-                  />
-
-                  {/* Cyan overlay tint */}
+                  <img src={croppedImage} alt="Thermal processed prescription scan" className="max-h-[340px] w-full object-contain opacity-70 mix-blend-screen contrast-200 saturate-200 hue-rotate-180" />
                   <div className="absolute inset-0 bg-cyan-900/30 mix-blend-overlay" />
-
-                  {/* Grid overlay */}
-                  <div 
-                    className="absolute inset-0 opacity-20"
-                    style={{
-                      backgroundImage: `
-                        linear-gradient(rgba(6,182,212,0.3) 1px, transparent 1px),
-                        linear-gradient(90deg, rgba(6,182,212,0.3) 1px, transparent 1px)
-                      `,
-                      backgroundSize: '20px 20px'
-                    }}
-                  />
-
-                  {/* Animated scanning line */}
+                  <div className="absolute inset-0 opacity-20" style={{
+                    backgroundImage: `linear-gradient(rgba(6,182,212,0.3) 1px, transparent 1px), linear-gradient(90deg, rgba(6,182,212,0.3) 1px, transparent 1px)`,
+                    backgroundSize: '20px 20px'
+                  }} />
                   {scanPhase === "scanning" && (
                     <>
-                      <div 
-                        className="absolute left-0 right-0 h-[2px] bg-cyan-400 shadow-[0_0_15px_rgba(6,182,212,1),0_0_30px_rgba(6,182,212,0.5)]"
-                        style={{ top: `${scanLineY}%` }}
-                      />
-                      <div 
-                        className="absolute left-0 right-0 h-16 bg-gradient-to-b from-cyan-400/20 to-transparent"
-                        style={{ top: `${scanLineY}%` }}
-                      />
+                      <div className="absolute left-0 right-0 h-[2px] bg-cyan-400 shadow-[0_0_15px_rgba(6,182,212,1),0_0_30px_rgba(6,182,212,0.5)]" style={{ top: `${scanLineY}%` }} />
+                      <div className="absolute left-0 right-0 h-16 bg-gradient-to-b from-cyan-400/20 to-transparent" style={{ top: `${scanLineY}%` }} />
                     </>
                   )}
-
-                  {/* REAL OCR Detected region bounding boxes */}
                   {scanPhase === "detected" && detectedRegions.map((region, idx) => (
-                    <div
-                      key={region.id}
-                      className="absolute border-2 animate-pulse"
-                      style={{
-                        left: `${region.x}%`,
-                        top: `${region.y}%`,
-                        width: `${region.width}%`,
-                        height: `${region.height}%`,
-                        borderColor: region.isMatched ? '#22d3ee' : '#f59e0b',
-                        boxShadow: region.isMatched 
-                          ? '0 0 15px rgba(34,211,238,0.8), inset 0 0 15px rgba(34,211,238,0.3)'
-                          : '0 0 8px rgba(245,158,11,0.4), inset 0 0 8px rgba(245,158,11,0.1)',
-                        animationDelay: `${idx * 0.08}s`,
-                        animationDuration: region.isMatched ? '1.5s' : '3s',
-                      }}
-                    >
-                      {/* Corner markers */}
+                    <div key={region.id} className="absolute border-2 animate-pulse" style={{
+                      left: `${region.x}%`, top: `${region.y}%`, width: `${region.width}%`, height: `${region.height}%`,
+                      borderColor: region.isMatched ? '#22d3ee' : '#f59e0b',
+                      boxShadow: region.isMatched ? '0 0 15px rgba(34,211,238,0.8), inset 0 0 15px rgba(34,211,238,0.3)' : '0 0 8px rgba(245,158,11,0.4), inset 0 0 8px rgba(245,158,11,0.1)',
+                      animationDelay: `${idx * 0.08}s`,
+                      animationDuration: region.isMatched ? '1.5s' : '3s',
+                    }}>
                       <div className="absolute -left-[2px] -top-[2px] h-2 w-2 border-l-2 border-t-2 border-cyan-400" />
                       <div className="absolute -right-[2px] -top-[2px] h-2 w-2 border-r-2 border-t-2 border-cyan-400" />
                       <div className="absolute -left-[2px] -bottom-[2px] h-2 w-2 border-l-2 border-b-2 border-cyan-400" />
                       <div className="absolute -right-[2px] -bottom-[2px] h-2 w-2 border-r-2 border-b-2 border-cyan-400" />
-
-                      {/* Region label with match info */}
-                      <div 
-                        className="absolute -top-6 left-0 whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] font-bold text-black flex items-center gap-1"
-                        style={{
-                          backgroundColor: region.isMatched ? '#22d3ee' : '#f59e0b',
-                        }}
-                      >
+                      <div className="absolute -top-6 left-0 whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] font-bold text-black flex items-center gap-1" style={{ backgroundColor: region.isMatched ? '#22d3ee' : '#f59e0b' }}>
                         {region.isMatched && <Crosshair className="h-2.5 w-2.5" />}
-                        {region.label} 
-                        <span className="opacity-70">
-                          {(region.confidence * 100).toFixed(0)}%
-                          {region.isMatched && ` | ${(region.matchScore! * 100).toFixed(0)}% match`}
-                        </span>
+                        {region.label}
+                        <span className="opacity-70">{(region.confidence * 100).toFixed(0)}%{region.isMatched && ` | ${(region.matchScore! * 100).toFixed(0)}% match`}</span>
                       </div>
                     </div>
                   ))}
 
-                  {/* Scanning status overlays */}
                   {scanPhase === "scanning" && (
                     <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/40">
                       <ScanLine className="h-12 w-12 text-cyan-400 animate-bounce" />
-                      <p className="mt-3 text-sm font-bold text-cyan-300 tracking-wider animate-pulse">
-                        SCANNING DOCUMENT...
-                      </p>
+                      <p className="mt-3 text-sm font-bold text-cyan-300 tracking-wider animate-pulse">SCANNING DOCUMENT...</p>
                     </div>
                   )}
-
                   {scanPhase === "reading" && (
                     <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/40">
                       <div className="flex items-center gap-3">
                         <Eye className="h-8 w-8 text-cyan-400 animate-pulse" />
                         <Type className="h-8 w-8 text-cyan-400 animate-pulse" style={{ animationDelay: '0.2s' }} />
                       </div>
-                      <p className="mt-3 text-sm font-bold text-cyan-300 tracking-wider animate-pulse">
-                        READING CHARACTERS...
-                      </p>
-                      <p className="mt-1 text-xs text-cyan-500/70 font-mono">
-                        Tesseract.js OCR Engine
-                      </p>
+                      <p className="mt-3 text-sm font-bold text-cyan-300 tracking-wider animate-pulse">READING CHARACTERS...</p>
+                      <p className="mt-1 text-xs text-cyan-500/70 font-mono">Model Detecting</p>
                     </div>
                   )}
-
                   {scanPhase === "matching" && (
                     <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/40">
                       <Search className="h-12 w-12 text-cyan-400 animate-spin" />
-                      <p className="mt-3 text-sm font-bold text-cyan-300 tracking-wider animate-pulse">
-                        MATCHING MEDICATIONS...
-                      </p>
-                      <p className="mt-1 text-xs text-cyan-500/70 font-mono">
-                        Comparing against {medications.length} medications
-                      </p>
+                      <p className="mt-3 text-sm font-bold text-cyan-300 tracking-wider animate-pulse">MATCHING MEDICATIONS...</p>
+                      <p className="mt-1 text-xs text-cyan-500/70 font-mono">Comparing against {classNamesRef.current.length} class names</p>
                     </div>
                   )}
 
-                  {/* Bottom tech decoration */}
                   <div className="absolute bottom-2 left-2 right-2 flex items-center justify-between text-[9px] text-cyan-500/60 font-mono">
-                    <span>ENGINE: TESSERACT.JS v5</span>
+                    <span>ENGINE: GOOGLE CLOUD VISION</span>
                     <span className="animate-pulse">● LIVE</span>
                     <span>MODE: OCR_ACTIVE</span>
                   </div>
@@ -1120,60 +932,29 @@ export default function UploadModal({ onClose }: UploadModalProps) {
 
                 {errorMessage && (
                   <div className="mt-4 rounded-2xl border border-red-200 bg-red-50 p-4">
-                    <p className="text-sm font-semibold text-red-900">
-                      {errorMessage}
-                    </p>
+                    <p className="text-sm font-semibold text-red-900">{errorMessage}</p>
                   </div>
                 )}
-
                 {prediction && storedPrescription && (
                   <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-center">
                     <div className="flex items-center justify-center gap-2">
                       <FileText className="h-5 w-5 text-emerald-600" />
-                      <p className="text-sm font-semibold text-emerald-700">
-                        Recognition result saved successfully.
-                      </p>
+                      <p className="text-sm font-semibold text-emerald-700">Recognition result saved successfully.</p>
                     </div>
                   </div>
                 )}
 
                 <div className="mt-5 flex gap-3">
-                  <button
-                    onClick={resetAll}
-                    disabled={isBusy}
-                    className="w-full rounded-xl bg-slate-100 py-3 font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {storedPrescription ? "Take Another Picture" : "Re-crop"}
+                  <button onClick={resetAll} disabled={isBusy} className="w-full rounded-xl bg-slate-100 py-3 font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-60">
+                    {storedPrescription ? "Take Another Picture" : "Back"}
                   </button>
-
-                  <button
-                    onClick={handleUseImage}
-                    disabled={isBusy}
-                    className="flex w-full items-center justify-center gap-2 rounded-xl bg-sky-500 py-3 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
-                  >
+                  <button onClick={handleUseImage} disabled={isBusy || showSuggestions} className="flex w-full items-center justify-center gap-2 rounded-xl bg-sky-500 py-3 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60">
                     {isBusy ? (
                       <>
                         <LoaderCircle className="h-5 w-5 animate-spin" />
-                        {storing
-                          ? "Saving..."
-                          : loadingModel
-                          ? "Loading model..."
-                          : scanPhase === "scanning"
-                          ? "Scanning..."
-                          : scanPhase === "reading"
-                          ? "Reading text..."
-                          : scanPhase === "matching"
-                          ? "Matching..."
-                          : "Detecting..."}
+                        {storing ? "Saving..." : scanPhase === "scanning" ? "Scanning..." : scanPhase === "reading" ? "Reading text..." : scanPhase === "matching" ? "Matching..." : "Detecting..."}
                       </>
-                    ) : storedPrescription ? (
-                      "View Details"
-                    ) : (
-                      <>
-                        <Check className="h-5 w-5" />
-                        Detect
-                      </>
-                    )}
+                    ) : storedPrescription ? "View Details" : <><Check className="h-5 w-5" />Detect</>}
                   </button>
                 </div>
               </>
@@ -1183,135 +964,59 @@ export default function UploadModal({ onClose }: UploadModalProps) {
       </div>
 
       {showMedicationModal && detailsPrescription && (
-        <MedicationDetailsModal
-          prescription={detailsPrescription}
-          onClose={() => setShowMedicationModal(false)}
-        />
+        <MedicationDetailsModal prescription={detailsPrescription} onClose={() => setShowMedicationModal(false)} />
       )}
     </div>
   );
 }
 
-function MedicationDetailsModal({
-  prescription,
-  onClose,
-}: {
-  prescription: StoredPrescription;
-  onClose: () => void;
-}) {
-  const medication = medications.find(
-    (med) =>
-      med.medication_name.toLowerCase() ===
-      prescription.medication_name.toLowerCase()
-  );
-
+function MedicationDetailsModal({ prescription, onClose }: { prescription: StoredPrescription; onClose: () => void }) {
+  const medication = medications.find((med) => med.medication_name.toLowerCase() === prescription.medication_name.toLowerCase());
   if (!medication) return null;
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center px-4">
-      <div
-        onClick={onClose}
-        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
-      />
-
+      <div onClick={onClose} className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
       <div className="relative max-h-[92vh] w-full max-w-md overflow-y-auto rounded-[32px] bg-white shadow-2xl">
         <div className="relative h-64 overflow-hidden rounded-t-[32px]">
-          <img
-            src={medication.image_url}
-            alt={medication.medication_name}
-            className="absolute inset-0 h-full w-full object-cover"
-          />
-
+          <img src={medication.image_url} alt={medication.medication_name} className="absolute inset-0 h-full w-full object-cover" />
           <div className="absolute inset-0 bg-black/45" />
-
-          <button
-            onClick={onClose}
-            className="absolute right-4 top-4 z-10 rounded-2xl bg-white/20 p-2 backdrop-blur-md hover:bg-white/30"
-          >
+          <button onClick={onClose} className="absolute right-4 top-4 z-10 rounded-2xl bg-white/20 p-2 backdrop-blur-md hover:bg-white/30">
             <X className="h-5 w-5 text-white" />
           </button>
         </div>
-
         <div className="relative -mt-16 px-6 pb-2 text-center">
           <div className="relative z-10 rounded-3xl bg-gradient-to-r from-sky-500 to-blue-600 px-6 py-5 shadow-lg shadow-sky-500/20">
-            <p className="text-sm font-medium text-white/80">
-              Detected Medication
-            </p>
-
-            <h2 className="mt-1 text-2xl font-black leading-tight text-white">
-              {medication.medication_name}
-            </h2>
-
+            <p className="text-sm font-medium text-white/80">Detected Medication</p>
+            <h2 className="mt-1 text-2xl font-black leading-tight text-white">{medication.medication_name}</h2>
             <div className="mx-auto mt-3 w-fit rounded-full bg-white/20 px-4 py-1.5 text-sm uppercase font-bold text-white backdrop-blur-sm">
               Confidence: {(prescription.confidence * 100).toFixed(2)}%
             </div>
           </div>
         </div>
-
         <div className="space-y-4 p-5 pt-2">
-          <DetailCard
-            icon={<Pill className="h-5 w-5 text-sky-600" />}
-            title="Dosage"
-            content={medication.dosage}
-          />
-
-          <DetailCard
-            icon={<BookOpen className="h-5 w-5 text-sky-600" />}
-            title="Description"
-            content={medication.description}
-          />
-
-          <DetailCard
-            icon={<ClipboardList className="h-5 w-5 text-sky-600" />}
-            title="Instructions"
-            content={medication.instructions}
-          />
-
-          <DetailCard
-            icon={<Activity className="h-5 w-5 text-sky-600" />}
-            title="Guidelines"
-            content={medication.guidelines}
-          />
-
+          <DetailCard icon={<Pill className="h-5 w-5 text-sky-600" />} title="Dosage" content={medication.dosage} />
+          <DetailCard icon={<BookOpen className="h-5 w-5 text-sky-600" />} title="Description" content={medication.description} />
+          <DetailCard icon={<ClipboardList className="h-5 w-5 text-sky-600" />} title="Instructions" content={medication.instructions} />
+          <DetailCard icon={<Activity className="h-5 w-5 text-sky-600" />} title="Guidelines" content={medication.guidelines} />
           <div className="rounded-3xl border border-red-200 bg-red-50 p-4">
             <div className="mb-2 flex items-center gap-2">
               <ShieldAlert className="h-5 w-5 text-red-600" />
               <h3 className="font-bold text-red-900">Medical Disclaimer</h3>
             </div>
-
-            <p className="text-sm leading-6 text-red-700">
-              {medication.medical_disclaimer}
-            </p>
+            <p className="text-sm leading-6 text-red-700">{medication.medical_disclaimer}</p>
           </div>
-
-          <button
-            onClick={onClose}
-            className="w-full rounded-2xl bg-gradient-to-r from-sky-500 to-blue-600 py-3 font-bold text-white shadow-lg shadow-sky-500/30 active:scale-95"
-          >
-            Close Details
-          </button>
+          <button onClick={onClose} className="w-full rounded-2xl bg-gradient-to-r from-sky-500 to-blue-600 py-3 font-bold text-white shadow-lg shadow-sky-500/30 active:scale-95">Close Details</button>
         </div>
       </div>
     </div>
   );
 }
 
-function DetailCard({
-  icon,
-  title,
-  content,
-}: {
-  icon: React.ReactNode;
-  title: string;
-  content: string;
-}) {
+function DetailCard({ icon, title, content }: { icon: React.ReactNode; title: string; content: string }) {
   return (
     <div className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
-      <div className="mb-2 flex items-center gap-2">
-        {icon}
-        <h3 className="font-bold text-slate-900">{title}</h3>
-      </div>
-
+      <div className="mb-2 flex items-center gap-2">{icon}<h3 className="font-bold text-slate-900">{title}</h3></div>
       <p className="text-sm leading-6 text-slate-600">{content}</p>
     </div>
   );

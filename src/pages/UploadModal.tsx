@@ -924,9 +924,9 @@ export default function UploadModal({ onClose }: UploadModalProps) {
                   )}
 
                   <div className="absolute bottom-2 left-2 right-2 flex items-center justify-between text-[9px] text-cyan-500/60 font-mono">
-                    <span>ENGINE: GOOGLE CLOUD VISION</span>
+                    <span>ENGINE: CNN Model</span>
                     <span className="animate-pulse">● LIVE</span>
-                    <span>MODE: OCR_ACTIVE</span>
+                    <span>MODE: ACTIVE</span>
                   </div>
                 </div>
 

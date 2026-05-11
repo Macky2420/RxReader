@@ -361,7 +361,7 @@ export default function UploadModal({ onClose }: UploadModalProps) {
   const [detectedRegions, setDetectedRegions] = useState<DetectedRegion[]>([]);
   const [scanLineY, setScanLineY] = useState(0);
   const [showCharacterHighlight, setShowCharacterHighlight] = useState(false);
-  const [ocrText, setOcrText] = useState<string>("");
+  const [, setOcrText] = useState<string>("");
   const [matchInfo, setMatchInfo] = useState<{ score: number; method: string } | null>(null);
 
   const [showSuggestions, setShowSuggestions] = useState(false);
@@ -668,7 +668,7 @@ export default function UploadModal({ onClose }: UploadModalProps) {
         return {
           ...region,
           isMatched: sim > 0.5,
-          matchedMedication: sim > 0.5 ? matchedClass : undefined,
+          matchedMedication: sim > 0.5 ? matchedClass ?? undefined : undefined,
           matchScore: sim,
         };
       });
